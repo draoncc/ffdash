@@ -598,4 +598,56 @@ mod tests {
         let plan = plan_job(&request(CodecKind::Hevc, "mp4", None, &avail));
         assert_eq!(plan, JobPlan::Encode(EncodePlan::new(HevcNvenc)));
     }
+
+    /// Every skip reason `plan_job` can produce, as the docs spell it (the
+    /// unsupported-profile reason names the profile, written `<profile>` in docs).
+    fn all_skip_reasons() -> Vec<String> {
+        let avail = dv_availability();
+        let none = availability(); // no Dolby Vision flags
+        let p10 = ALL_PROFILES[4];
+        let p8_1 = DolbyVisionProfile::P8_1;
+        let reasons = [
+            plan_job(&request(CodecKind::Hevc, "webm", Some(p8_1), &avail)),
+            plan_job(&request(CodecKind::Vp9, "mkv", Some(p8_1), &avail)),
+            plan_job(&request(CodecKind::Hevc, "mkv", Some(p10), &avail)),
+            plan_job(&request(
+                CodecKind::Hevc,
+                "mkv",
+                Some(DolbyVisionProfile::P7),
+                &avail,
+            )),
+            plan_job(&request(CodecKind::Hevc, "mkv", Some(p8_1), &none)),
+        ];
+        reasons
+            .into_iter()
+            .map(skip_reason)
+            .map(|r| r.replace(&p10.to_string(), "<profile>"))
+            .collect()
+    }
+
+    #[test]
+    fn every_skip_reason_appears_in_the_docs_and_in_app_help() {
+        let docs = [
+            ("README.md", include_str!("../../README.md")),
+            ("CONFIG.md", include_str!("../../CONFIG.md")),
+            (
+                "docs/ENCODER_REFERENCE.md",
+                include_str!("../../docs/ENCODER_REFERENCE.md"),
+            ),
+            (
+                "src/ui/help/topics.rs",
+                include_str!("../ui/help/topics.rs"),
+            ),
+        ];
+        let reasons = all_skip_reasons();
+        assert_eq!(reasons.len(), 5);
+        for reason in &reasons {
+            for (name, text) in docs {
+                assert!(
+                    text.contains(reason.as_str()),
+                    "{name} is missing: {reason}"
+                );
+            }
+        }
+    }
 }
