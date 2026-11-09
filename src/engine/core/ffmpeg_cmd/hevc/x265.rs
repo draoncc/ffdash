@@ -6,7 +6,7 @@ use super::super::container_from_output;
 use super::super::dolby_vision_conversion;
 use super::super::{
     apply_audio_settings_with_video_map, apply_color_metadata, apply_job_additional_args,
-    fps_scale_filters,
+    colour_profile, fps_scale_filters,
 };
 use super::apply_hevc_container_tag;
 use crate::engine::core::encode_plan::EncodePlan;
@@ -44,6 +44,7 @@ fn x265_params(profile: &Profile, dolby_vision: bool) -> Option<String> {
 }
 
 pub(super) fn build(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
+    let profile = &*colour_profile(profile, plan);
     let mut cmd = Command::new("ffmpeg");
     let hevc = profile.codec.hevc_or_default();
 

@@ -197,6 +197,30 @@ fn apply_color_metadata(cmd: &mut Command, profile: &Profile) {
     }
 }
 
+/// The profile a Dolby Vision job's colour signalling is built from. The output keeps
+/// the source's base layer, so its colourspace, primaries and transfer follow the
+/// source's Dolby Vision Profile instead of the user's profile (which also keeps the
+/// HDR->SDR tonemap and x265's `hdr10` off). Other jobs use the profile as is.
+fn colour_profile<'a>(profile: &'a Profile, plan: &EncodePlan) -> std::borrow::Cow<'a, Profile> {
+    let Some(dolby_vision) = plan.dolby_vision else {
+        return std::borrow::Cow::Borrowed(profile);
+    };
+    let mut profile = profile.clone();
+    match dolby_vision.base_layer_colour() {
+        Some(colour) => {
+            profile.colorspace = colour.colorspace;
+            profile.color_primaries = colour.primaries;
+            profile.color_trc = colour.trc;
+        }
+        None => {
+            profile.colorspace = -1;
+            profile.color_primaries = -1;
+            profile.color_trc = -1;
+        }
+    }
+    std::borrow::Cow::Owned(profile)
+}
+
 fn null_output_target() -> &'static str {
     if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
@@ -1197,6 +1221,7 @@ fn build_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
 
 /// Build software AV1 encoding command (libsvtav1)
 fn build_av1_software_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
+    let profile = &*colour_profile(profile, plan);
     let mut cmd = Command::new("ffmpeg");
 
     // Input file; after a Dolby Vision Conversion, video comes from the converted stream.

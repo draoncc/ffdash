@@ -31,6 +31,36 @@ impl DolbyVisionProfile {
     }
 }
 
+/// Colour signalling of a Dolby Vision base layer, as FFmpeg `-colorspace`,
+/// `-color_primaries` and `-color_trc` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BaseLayerColour {
+    pub colorspace: i32,
+    pub primaries: i32,
+    pub trc: i32,
+}
+
+impl DolbyVisionProfile {
+    /// The base layer's colour signalling: BT.2020 PQ for 8.1, BT.2020 HLG for 8.4.
+    /// `None` when the base layer has no HDR10/HLG fallback to signal (Profile 5's
+    /// IPT-PQ-C2 stays untagged).
+    pub fn base_layer_colour(self) -> Option<BaseLayerColour> {
+        const BT2020: i32 = 9;
+        const PQ: i32 = 16;
+        const HLG: i32 = 18;
+        let trc = match self {
+            Self::P8_1 => PQ,
+            Self::P8_4 => HLG,
+            _ => return None,
+        };
+        Some(BaseLayerColour {
+            colorspace: BT2020,
+            primaries: BT2020,
+            trc,
+        })
+    }
+}
+
 impl fmt::Display for DolbyVisionProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
