@@ -3,7 +3,7 @@ use super::ffmpeg_info::{paths_are_same_file, probe_duration};
 use super::log::write_debug_log;
 use super::profile::{Codec, Profile};
 use super::types::{JobStatus, ProgressParser, VideoJob};
-use crate::engine::planning::JobPlan;
+use crate::engine::planning::{JobPlan, SkipReason};
 use crate::engine::worker::PidRegistry;
 use crate::engine::{hardware, probe};
 use anyhow::{Context, Result};
@@ -2081,7 +2081,7 @@ fn plan_for(
     plan_override: Option<&EncodePlan>,
     job: &VideoJob,
     profile: &Profile,
-) -> Result<EncodePlan, String> {
+) -> Result<EncodePlan, SkipReason> {
     if job.dolby_vision.is_some() {
         let hardware_requested = plan_override.is_some_and(|p| p.uses_hardware());
         return match super::encode_plan::plan_job_for_profile(job, profile, hardware_requested) {
@@ -2136,7 +2136,7 @@ where
                 job.input_path.display(),
                 reason
             ));
-            job.skip(reason);
+            job.skip(reason.to_string());
             callback(job, &ProgressParser::new());
             return Ok(());
         }

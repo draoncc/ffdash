@@ -5,6 +5,8 @@
 //! Encoder selection ([`selection::select_encoder`]) stays its own seam and
 //! planning wraps it (ADR 0003).
 
+use std::fmt;
+
 use super::core::{Codec, EncodePlan};
 use super::dolby_vision::DolbyVisionProfile;
 use super::dovi_tool;
@@ -31,8 +33,46 @@ pub struct PlanRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobPlan {
     Encode(EncodePlan),
-    /// The job must not run; the text is shown to the user.
-    Skip(String),
+    /// The job must not run; the reason is shown to the user.
+    Skip(SkipReason),
+}
+
+/// Why a job is skipped. Its `Display` text is what the user sees, and is spelled
+/// out in the README, CONFIG.md, docs/ENCODER_REFERENCE.md and the in-app help.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    /// A Dolby Vision source with WebM output.
+    WebmContainer,
+    /// A Dolby Vision source with the VP9 Codec.
+    Vp9Codec,
+    /// A Dolby Vision source with AV1 in an MP4 Container.
+    Mp4Av1,
+    /// A Dolby Vision Profile that is out of scope.
+    UnsupportedProfile(DolbyVisionProfile),
+    /// A Profile 7 source and no working `dovi_tool` to convert it.
+    DoviToolMissing,
+    /// No Encoder in this FFmpeg passed the Dolby Vision Probe Encode.
+    NoDolbyVisionEncoder,
+}
+
+impl fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WebmContainer => write!(f, "WebM can't carry Dolby Vision"),
+            Self::Vp9Codec => write!(f, "VP9 can't carry Dolby Vision"),
+            Self::Mp4Av1 => write!(f, "MP4 can't carry Dolby Vision AV1 yet; use MKV"),
+            Self::UnsupportedProfile(profile) => {
+                write!(f, "Dolby Vision Profile {profile} isn't supported")
+            }
+            Self::DoviToolMissing => {
+                write!(f, "install dovi_tool to convert Dolby Vision Profile 7")
+            }
+            Self::NoDolbyVisionEncoder => write!(
+                f,
+                "Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision"
+            ),
+        }
+    }
 }
 
 /// Plan one job: an Encode Plan, or a skip with a user-facing reason.
@@ -57,14 +97,14 @@ pub fn plan_job(req: &PlanRequest) -> JobPlan {
 /// built.
 fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan {
     if req.container == "webm" {
-        return JobPlan::Skip("WebM can't carry Dolby Vision".to_string());
+        return JobPlan::Skip(SkipReason::WebmContainer);
     }
     if req.codec == CodecKind::Vp9 {
-        return JobPlan::Skip("VP9 can't carry Dolby Vision".to_string());
+        return JobPlan::Skip(SkipReason::Vp9Codec);
     }
     // Dolby Vision AV1 in MP4 needs dav1/dvvC signalling that isn't handled or verified.
     if req.codec == CodecKind::Av1 && req.container == "mp4" {
-        return JobPlan::Skip("MP4 can't carry Dolby Vision AV1 yet; use MKV".to_string());
+        return JobPlan::Skip(SkipReason::Mp4Av1);
     }
     // Profile 7 is converted to 8.1 first (HEVC and AV1; AV1 then keeps it as Profile 10).
     let profile_ok = matches!(
@@ -72,18 +112,15 @@ fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan 
         DolbyVisionProfile::P5 | DolbyVisionProfile::P8_1 | DolbyVisionProfile::P8_4
     ) || (profile == DolbyVisionProfile::P7
         && matches!(req.codec, CodecKind::Hevc | CodecKind::Av1));
-    let container_ok = match req.codec {
-        CodecKind::Hevc => matches!(req.container, "mkv" | "mp4"),
-        CodecKind::Av1 => matches!(req.container, "mkv" | "mp4"),
-        CodecKind::Vp9 => false,
-    };
+    // WebM, VP9 and AV1-in-MP4 are already skipped above.
+    let container_ok = matches!(req.container, "mkv" | "mp4");
     if !(profile_ok && container_ok) {
-        return JobPlan::Skip(format!("Dolby Vision Profile {profile} isn't supported"));
+        return JobPlan::Skip(SkipReason::UnsupportedProfile(profile));
     }
     // Profile 7 (dual-layer) is converted to 8.1 with `dovi_tool` before the encode.
     let converts = profile == DolbyVisionProfile::P7;
     if converts && !req.dovi_tool {
-        return JobPlan::Skip(DOVI_TOOL_MISSING_REASON.to_string());
+        return JobPlan::Skip(SkipReason::DoviToolMissing);
     }
 
     // Dolby Vision output is always 10-bit (Main10).
@@ -99,10 +136,7 @@ fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan 
         .capability(encoder)
         .is_some_and(|c| c.dolby_vision);
     if !can_encode {
-        return JobPlan::Skip(
-            "Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision"
-                .to_string(),
-        );
+        return JobPlan::Skip(SkipReason::NoDolbyVisionEncoder);
     }
     if converts {
         return JobPlan::Encode(
@@ -114,8 +148,21 @@ fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan 
     JobPlan::Encode(EncodePlan::new(encoder).with_dolby_vision(profile))
 }
 
-/// Why a Profile 7 job is skipped when `dovi_tool` is missing.
-pub const DOVI_TOOL_MISSING_REASON: &str = "install dovi_tool to convert Dolby Vision Profile 7";
+/// Everything planning a job on this host decides from; Encoder Availability and
+/// `dovi_tool` are discovered by [`plan_job_on_host`] instead of passed in.
+#[derive(Debug, Clone, Copy)]
+pub struct HostPlanRequest<'a> {
+    pub codec: &'a Codec,
+    /// Output Container extension, lowercase (`mkv`, `mp4`, `webm`).
+    pub container: &'a str,
+    /// The source file; the lazy Dolby Vision Probe Encode runs against it.
+    pub source: &'a std::path::Path,
+    pub dolby_vision: Option<DolbyVisionProfile>,
+    pub use_hardware: bool,
+    /// The user's preferred Encoder, by FFmpeg name.
+    pub preferred_encoder: Option<&'a str>,
+    pub bit_depth: u8,
+}
 
 /// Plan a job on this host: [`plan_job`] with Encoder Availability from the
 /// session's Probe Encodes.
@@ -123,20 +170,17 @@ pub const DOVI_TOOL_MISSING_REASON: &str = "install dovi_tool to convert Dolby V
 /// For a Dolby Vision job the availability comes from the lazy Dolby Vision Probe
 /// Encode against `source` ([`hardware::detect_dolby_vision_availability`]), which
 /// blocks: call this off the UI thread.
-pub fn plan_job_on_host(
-    codec: &Codec,
-    container: &str,
-    source: &std::path::Path,
-    dolby_vision: Option<DolbyVisionProfile>,
-    use_hardware: bool,
-    preferred_encoder: Option<&str>,
-    bit_depth: u8,
-) -> JobPlan {
-    let kind = match codec {
-        Codec::Vp9(_) => CodecKind::Vp9,
-        Codec::Av1(_) => CodecKind::Av1,
-        Codec::Hevc(_) => CodecKind::Hevc,
-    };
+pub fn plan_job_on_host(req: &HostPlanRequest) -> JobPlan {
+    let HostPlanRequest {
+        codec,
+        container,
+        source,
+        dolby_vision,
+        use_hardware,
+        preferred_encoder,
+        bit_depth,
+    } = *req;
+    let kind = CodecKind::from(codec);
     // Dolby Vision jobs need the lazy Dolby Vision probe (cached per session).
     let dolby_vision_availability;
     let availability = if dolby_vision.is_some() {
@@ -254,9 +298,7 @@ mod tests {
             DolbyVisionProfile::P8_4,
         ] {
             let plan = plan_job(&request(CodecKind::Hevc, "mkv", Some(profile), &avail));
-            let JobPlan::Skip(reason) = plan else {
-                panic!("expected a skip for {profile}");
-            };
+            let reason = skip_reason(plan);
             assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
             assert!(reason.contains("upgrade"), "{reason}");
         }
@@ -288,9 +330,7 @@ mod tests {
             DolbyVisionProfile::P8_4,
         ] {
             let plan = plan_job(&request(CodecKind::Hevc, "mp4", Some(profile), &avail));
-            let JobPlan::Skip(reason) = plan else {
-                panic!("expected a skip for {profile}");
-            };
+            let reason = skip_reason(plan);
             assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
         }
     }
@@ -303,7 +343,7 @@ mod tests {
 
     fn skip_reason(plan: JobPlan) -> String {
         match plan {
-            JobPlan::Skip(reason) => reason,
+            JobPlan::Skip(reason) => reason.to_string(),
             other => panic!("expected a skip, got {other:?}"),
         }
     }
@@ -451,7 +491,7 @@ mod tests {
             Some(DolbyVisionProfile::P7),
             &avail,
         ));
-        assert_eq!(plan, JobPlan::Skip(DOVI_TOOL_MISSING_REASON.to_string()));
+        assert_eq!(plan, JobPlan::Skip(SkipReason::DoviToolMissing));
     }
 
     #[test]
@@ -461,9 +501,7 @@ mod tests {
             dovi_tool: true,
             ..request(CodecKind::Av1, "mkv", Some(DolbyVisionProfile::P7), &avail)
         };
-        let JobPlan::Skip(reason) = plan_job(&req) else {
-            panic!("expected a skip");
-        };
+        let reason = skip_reason(plan_job(&req));
         assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
     }
 
@@ -541,7 +579,7 @@ mod tests {
             Some(DolbyVisionProfile::P7),
             &avail,
         ));
-        assert_eq!(plan, JobPlan::Skip(DOVI_TOOL_MISSING_REASON.to_string()));
+        assert_eq!(plan, JobPlan::Skip(SkipReason::DoviToolMissing));
     }
 
     #[test]
@@ -553,10 +591,7 @@ mod tests {
             Some(DolbyVisionProfile::P7),
             &avail,
         ));
-        assert_eq!(
-            plan,
-            JobPlan::Skip("install dovi_tool to convert Dolby Vision Profile 7".to_string())
-        );
+        assert_eq!(plan, JobPlan::Skip(SkipReason::DoviToolMissing));
     }
 
     #[test]
@@ -566,9 +601,7 @@ mod tests {
             dovi_tool: true,
             ..request(CodecKind::Hevc, "mkv", Some(DolbyVisionProfile::P7), &avail)
         };
-        let JobPlan::Skip(reason) = plan_job(&req) else {
-            panic!("expected a skip");
-        };
+        let reason = skip_reason(plan_job(&req));
         assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
     }
 

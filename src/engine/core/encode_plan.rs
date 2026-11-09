@@ -3,7 +3,7 @@
 use super::profile::Profile;
 use crate::engine::dolby_vision::DolbyVisionProfile;
 use crate::engine::hardware::{self, VideoEncoder};
-use crate::engine::planning::{JobPlan, plan_job_on_host};
+use crate::engine::planning::{HostPlanRequest, JobPlan, plan_job_on_host};
 
 /// What a single encode will run with: the selected Encoder and, optionally,
 /// a Quality Override (as set by Auto-VMAF).
@@ -130,15 +130,15 @@ pub fn plan_job_for_profile(
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_else(|| synced.container.clone());
-    plan_job_on_host(
-        &synced.codec,
-        &container,
-        &job.input_path,
-        job.dolby_vision.map(|dv| dv.profile),
-        hardware_requested || synced.use_hardware_encoding,
-        Some(&synced.video_codec),
-        required_bit_depth(&synced, &job.input_path),
-    )
+    plan_job_on_host(&HostPlanRequest {
+        codec: &synced.codec,
+        container: &container,
+        source: &job.input_path,
+        dolby_vision: job.dolby_vision.map(|dv| dv.profile),
+        use_hardware: hardware_requested || synced.use_hardware_encoding,
+        preferred_encoder: Some(&synced.video_codec),
+        bit_depth: required_bit_depth(&synced, &job.input_path),
+    })
 }
 
 /// Whether `pix_fmt` is a 10-bit pixel format (Main10 for HEVC). The one place that

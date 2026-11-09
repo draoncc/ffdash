@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use super::core::Codec;
 use super::hardware::VideoEncoder;
 
 /// The Codec an output is written in, without any of its settings.
@@ -13,6 +14,16 @@ pub enum CodecKind {
     Vp9,
     Av1,
     Hevc,
+}
+
+impl From<&Codec> for CodecKind {
+    fn from(codec: &Codec) -> Self {
+        match codec {
+            Codec::Vp9(_) => Self::Vp9,
+            Codec::Av1(_) => Self::Av1,
+            Codec::Hevc(_) => Self::Hevc,
+        }
+    }
 }
 
 impl CodecKind {

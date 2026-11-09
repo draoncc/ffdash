@@ -267,13 +267,8 @@ pub fn select_encoder(
     preferred_encoder: Option<&str>,
     bit_depth: u8,
 ) -> VideoEncoder {
-    let kind = match codec {
-        Codec::Vp9(_) => CodecKind::Vp9,
-        Codec::Av1(_) => CodecKind::Av1,
-        Codec::Hevc(_) => CodecKind::Hevc,
-    };
     selection::select_encoder(
-        kind,
+        CodecKind::from(codec),
         use_hardware,
         preferred_encoder.and_then(VideoEncoder::from_ffmpeg_name),
         bit_depth,
