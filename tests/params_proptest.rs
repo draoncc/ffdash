@@ -1,9 +1,9 @@
-/// Property-based tests for parameter validation
-///
-/// Uses proptest to generate random valid and invalid parameter combinations
-/// and verify that validation behaves correctly.
-///
-/// Run with: cargo test --features dev-tools --test params_proptest
+//! Property-based tests for parameter validation
+//!
+//! Uses proptest to generate random valid and invalid parameter combinations
+//! and verify that validation behaves correctly.
+//!
+//! Run with: cargo test --features dev-tools --test params_proptest
 
 #[cfg(feature = "dev-tools")]
 mod tests {
@@ -12,33 +12,6 @@ mod tests {
     };
     use proptest::prelude::*;
     use std::collections::HashMap;
-
-    /// Generate a valid value within a parameter's range
-    fn value_in_range(range: &Range) -> BoxedStrategy<Value> {
-        match range {
-            Range::Int { min, max } => {
-                // Clamp to i32 range for simplicity
-                let min = (*min).max(i32::MIN as i64) as i32;
-                let max = (*max).min(i32::MAX as i64) as i32;
-                (min..=max).prop_map(Value::I32).boxed()
-            }
-            Range::Float { min, max } => {
-                let min = (*min) as f32;
-                let max = (*max) as f32;
-                (min..=max).prop_map(Value::F32).boxed()
-            }
-            Range::Enum { values } => {
-                // For enum, just use the first value as a simple test
-                if !values.is_empty() {
-                    Just(Value::String(values[0].clone())).boxed()
-                } else {
-                    Just(Value::String("".to_string())).boxed()
-                }
-            }
-            Range::Bool => prop::bool::ANY.prop_map(Value::Bool).boxed(),
-            Range::Any => Just(Value::I32(0)).boxed(), // Default for Any
-        }
-    }
 
     #[test]
     fn test_valid_values_for_all_encoders() {
@@ -194,7 +167,7 @@ mod tests {
     fn test_enum_validation_strictness() {
         // Test that enum validation is strict (rejects invalid values)
         for param in ffdash::engine::params::PARAMS.iter() {
-            if let Range::Enum { values } = &param.range {
+            if let Range::Enum { .. } = &param.range {
                 // Find an encoder that supports this param
                 for encoder in ENCODERS.iter() {
                     if !param.is_supported_by(encoder.id) {

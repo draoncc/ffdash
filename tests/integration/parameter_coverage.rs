@@ -121,20 +121,19 @@ fn test_vaapi_command_covers_shared_parameters() {
 
     // Check each ParameterSupport::Both parameter
     for mapping in mappings.iter() {
-        if matches!(mapping.support, ParameterSupport::Both) {
-            if mapping.should_be_in_vaapi(&profile) {
-                if let Some(flag) = mapping.vaapi_flag {
-                    // Skip filter-based parameters (they're complex to assert)
-                    if flag.contains("scale") || flag.contains("fps") {
-                        continue;
-                    }
+        if matches!(mapping.support, ParameterSupport::Both) && mapping.should_be_in_vaapi(&profile)
+        {
+            if let Some(flag) = mapping.vaapi_flag {
+                // Skip filter-based parameters (they're complex to assert)
+                if flag.contains("scale") || flag.contains("fps") {
+                    continue;
+                }
 
-                    if !cmd.contains(flag) {
-                        missing_params.push(format!(
-                            "  - Flag '{}' for parameter '{}' (marked as Both but missing from VAAPI)",
-                            flag, mapping.field_name
-                        ));
-                    }
+                if !cmd.contains(flag) {
+                    missing_params.push(format!(
+                        "  - Flag '{}' for parameter '{}' (marked as Both but missing from VAAPI)",
+                        flag, mapping.field_name
+                    ));
                 }
             }
         }

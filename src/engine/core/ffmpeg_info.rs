@@ -27,7 +27,7 @@ impl FfprobeStream {
     fn is_attached_pic(&self) -> bool {
         self.disposition
             .as_ref()
-            .map_or(false, |d| d.attached_pic != 0)
+            .is_some_and(|d| d.attached_pic != 0)
     }
 }
 

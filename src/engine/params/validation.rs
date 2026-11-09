@@ -643,9 +643,9 @@ fn apply_profile_field(profile: &mut Profile, field_name: &str, value: &Value) {
             #[cfg(feature = "dev-tools")]
             {
                 use crate::engine::core::write_debug_log;
-                let _ = write_debug_log(&format!(
-                    "[PARAMS] Warning: apply_profile_field couldn't apply value (field not mapped or type mismatch)\n"
-                ));
+                let _ = write_debug_log(
+                    "[PARAMS] Warning: apply_profile_field couldn't apply value (field not mapped or type mismatch)\n",
+                );
             }
         }
     }
@@ -788,8 +788,10 @@ mod tests {
         use crate::engine::core::{Codec, Profile, Vp9Config};
 
         // Create a profile with out-of-range values
-        let mut vp9_config = Vp9Config::default();
-        vp9_config.cpu_used = 100; // Out of range (max 8)
+        let vp9_config = Vp9Config {
+            cpu_used: 100, // Out of range (max 8)
+            ..Default::default()
+        };
 
         let mut profile = Profile {
             name: "Test".to_string(),

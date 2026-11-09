@@ -204,15 +204,15 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.startup.autostart, false);
-        assert_eq!(config.startup.scan_on_launch, true);
+        assert!(!config.startup.autostart);
+        assert!(config.startup.scan_on_launch);
         assert_eq!(config.defaults.profile, "1080p Shrinker");
         assert_eq!(config.defaults.max_workers, 1);
-        assert_eq!(config.defaults.overwrite, false);
+        assert!(!config.defaults.overwrite);
         assert_eq!(config.defaults.last_used_profile, None);
-        assert_eq!(config.defaults.auto_bit_depth, true);
-        assert_eq!(config.defaults.disable_vaapi_fallback, false);
-        assert_eq!(config.defaults.skip_vp9_av1, true);
+        assert!(config.defaults.auto_bit_depth);
+        assert!(!config.defaults.disable_vaapi_fallback);
+        assert!(config.defaults.skip_vp9_av1);
     }
 
     #[test]

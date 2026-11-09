@@ -3,7 +3,7 @@
 use ffdash::engine::hardware::VideoEncoder;
 use ffdash::engine::{Codec, EncodePlan, Profile, VideoJob, build_encode_cmds};
 use ffdash::ui::state::{ConfigState, RateControlMode};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Convert a Command to a string for testing/assertions
@@ -33,7 +33,7 @@ pub fn build_test_cmd(config: &ConfigState, profile_name: &str) -> String {
 }
 
 /// Build an FFmpeg command from a Profile for testing
-pub fn build_cmd_from_profile(profile: &Profile, input: &PathBuf, output: &PathBuf) -> String {
+pub fn build_cmd_from_profile(profile: &Profile, input: &Path, output: &Path) -> String {
     let mut parts = vec!["ffmpeg".to_string()];
 
     // Input
@@ -224,70 +224,77 @@ pub fn default_config() -> ConfigState {
 
 /// Create a ConfigState with CQ rate control mode
 pub fn cq_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.rate_control_mode = RateControlMode::CQ;
-    config.crf = 30;
-    config
+    ConfigState {
+        rate_control_mode: RateControlMode::CQ,
+        crf: 30,
+        ..Default::default()
+    }
 }
 
 /// Create a ConfigState with TwoPassVBR rate control mode
 pub fn vbr_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.rate_control_mode = RateControlMode::TwoPassVBR;
-    config.video_target_bitrate = 2000;
-    config.video_min_bitrate = 1000;
-    config.video_max_bitrate = 3000;
-    config.two_pass = true;
-    config
+    ConfigState {
+        rate_control_mode: RateControlMode::TwoPassVBR,
+        video_target_bitrate: 2000,
+        video_min_bitrate: 1000,
+        video_max_bitrate: 3000,
+        two_pass: true,
+        ..Default::default()
+    }
 }
 
 /// Create a ConfigState with CBR rate control mode
 pub fn cbr_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.rate_control_mode = RateControlMode::CBR;
-    config.video_min_bitrate = 2000;
-    config.video_max_bitrate = 2000;
-    config
+    ConfigState {
+        rate_control_mode: RateControlMode::CBR,
+        video_min_bitrate: 2000,
+        video_max_bitrate: 2000,
+        ..Default::default()
+    }
 }
 
 /// Create a ConfigState with CQCap rate control mode
 pub fn cqcap_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.rate_control_mode = RateControlMode::CQCap;
-    config.crf = 30;
-    config.video_max_bitrate = 5000;
-    config
+    ConfigState {
+        rate_control_mode: RateControlMode::CQCap,
+        crf: 30,
+        video_max_bitrate: 5000,
+        ..Default::default()
+    }
 }
 
 /// Create a two-pass encoding config
 pub fn two_pass_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.two_pass = true;
-    config.cpu_used_pass1 = 4;
-    config.cpu_used_pass2 = 1;
-    config
+    ConfigState {
+        two_pass: true,
+        cpu_used_pass1: 4,
+        cpu_used_pass2: 1,
+        ..Default::default()
+    }
 }
 
 /// Create a config with all parallelism features enabled
 pub fn parallel_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.row_mt = true;
-    config.frame_parallel = true;
-    config.tile_columns = 2;
-    config.tile_rows = 1;
-    config.threads = 8;
-    config
+    ConfigState {
+        row_mt: true,
+        frame_parallel: true,
+        tile_columns: 2,
+        tile_rows: 1,
+        threads: 8,
+        ..Default::default()
+    }
 }
 
 /// Create a config with custom GOP settings
 pub fn custom_gop_config() -> ConfigState {
-    let mut config = ConfigState::default();
-    config.gop_length = "120".to_string();
-    config.fixed_gop = true;
-    config.keyint_min = "60".to_string();
-    config.lag_in_frames = 16;
-    config.auto_alt_ref = 1;
-    config
+    ConfigState {
+        gop_length: "120".to_string(),
+        fixed_gop: true,
+        keyint_min: "60".to_string(),
+        lag_in_frames: 16,
+        auto_alt_ref: 1,
+        ..Default::default()
+    }
 }
 
 /// Create a config with tuning options

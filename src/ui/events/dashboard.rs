@@ -177,16 +177,14 @@ pub(super) fn handle_dashboard_key(
             }
         }
         // Increase worker count
-        KeyCode::Char(']') => {
-            if state.config.max_workers < 16 {
-                state.config.max_workers += 1;
-                state.config.is_modified = true;
+        KeyCode::Char(']') if state.config.max_workers < 16 => {
+            state.config.max_workers += 1;
+            state.config.is_modified = true;
 
-                if let Some(pool) = &state.worker_pool {
-                    pool.set_max_workers(state.config.max_workers as usize);
-                    // Try to spawn additional workers for pending jobs
-                    workers::spawn_next_job(state);
-                }
+            if let Some(pool) = &state.worker_pool {
+                pool.set_max_workers(state.config.max_workers as usize);
+                // Try to spawn additional workers for pending jobs
+                workers::spawn_next_job(state);
             }
         }
         _ => {}

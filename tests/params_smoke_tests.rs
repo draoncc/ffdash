@@ -1,11 +1,11 @@
-/// Smoke tests for encoder parameter registry
-///
-/// These tests verify that the TOML parameter ranges match actual FFmpeg behavior
-/// by attempting to encode with boundary values and invalid values.
-///
-/// Run with: cargo test --features dev-tools --test params_smoke_tests -- --test-threads=1
-///
-/// Note: These tests are SLOW (they actually encode video) and require FFmpeg installed.
+//! Smoke tests for encoder parameter registry
+//!
+//! These tests verify that the TOML parameter ranges match actual FFmpeg behavior
+//! by attempting to encode with boundary values and invalid values.
+//!
+//! Run with: cargo test --features dev-tools --test params_smoke_tests -- --test-threads=1
+//!
+//! Note: These tests are SLOW (they actually encode video) and require FFmpeg installed.
 
 #[cfg(feature = "dev-tools")]
 mod tests {
@@ -17,7 +17,7 @@ mod tests {
     /// Generate a minimal test video file (1 second, 64x64, solid color)
     fn create_test_video(output_path: &Path) -> Result<(), String> {
         let status = Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-f",
                 "lavfi",
                 "-i",
@@ -82,10 +82,7 @@ mod tests {
             println!("\n=== Testing {} ===", encoder_id);
 
             // Skip if encoder not available
-            let check = Command::new("ffmpeg")
-                .args(&["-encoders"])
-                .output()
-                .unwrap();
+            let check = Command::new("ffmpeg").args(["-encoders"]).output().unwrap();
             let encoders_list = String::from_utf8_lossy(&check.stdout);
             if !encoders_list.contains(encoder_id) {
                 println!("⚠️  Encoder {} not available, skipping", encoder_id);

@@ -5,7 +5,6 @@ use ffdash::engine::{
     worker::{WorkerMessage, WorkerPool},
 };
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 #[test]
@@ -56,7 +55,7 @@ fn test_worker_pool_dynamic_max_workers() {
 
 #[test]
 fn test_worker_pool_can_spawn_limit() {
-    let pool = Arc::new(WorkerPool::new(2));
+    let pool = WorkerPool::new(2);
 
     // Create dummy jobs
     let _job1 = VideoJob::new(

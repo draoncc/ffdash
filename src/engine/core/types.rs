@@ -149,10 +149,8 @@ impl ProgressParser {
                         self.total_size = Some(size);
                     }
                 }
-                "progress" => {
-                    if value.trim() == "end" {
-                        self.is_complete = true;
-                    }
+                "progress" if value.trim() == "end" => {
+                    self.is_complete = true;
                 }
                 _ => {}
             }
