@@ -4,3 +4,11 @@
 # This is required for private git dependencies that need SSH authentication
 [net]
 git-fetch-with-cli = true
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld"
+rustflags = [
+  "-Lnative=.xwin-cache/splat/crt/lib/x86_64",
+  "-Lnative=.xwin-cache/splat/sdk/lib/um/x86_64",
+  "-Lnative=.xwin-cache/splat/sdk/lib/ucrt/x86_64"
+]

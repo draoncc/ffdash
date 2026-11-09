@@ -5,6 +5,7 @@
 /ffdash.log
 /.enc_state
 /.direnv/
+/.xwin-cache/
 
 # Contributors' Dolby Vision samples for tests/dolby_vision_e2e.rs
 /tests/samples/
