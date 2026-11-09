@@ -1,7 +1,10 @@
 // Core encoding engine - independent of UI
 
 pub mod core;
+pub mod dolby_vision;
+pub mod dovi_tool;
 pub mod hardware;
+pub mod planning;
 pub mod probe;
 pub mod probe_encode;
 pub mod selection;

@@ -166,6 +166,68 @@ fn snapshot_hevc_x265_mp4_is_tagged_hvc1() {
     assert_snapshot!("hevc_x265_mp4", out);
 }
 
+fn build_dolby_vision(
+    job: &VideoJob,
+    profile: &Profile,
+    dv: ffdash::engine::dolby_vision::DolbyVisionProfile,
+) -> String {
+    let plan = EncodePlan::new(VideoEncoder::Libx265)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(dv);
+    let cmds = build_encode_cmds(job, profile, &plan);
+    cmds.iter().map(to_string).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn snapshot_hevc_x265_dolby_vision_profiles_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mkv");
+    for (name, dv) in [("p5", Dv::P5), ("p8_1", Dv::P8_1), ("p8_4", Dv::P8_4)] {
+        let out = build_dolby_vision(&job, &profile, dv);
+        assert!(out.contains("-dolbyvision 1"), "{out}");
+        assert!(out.contains("-pix_fmt yuv420p10le"), "{out}");
+        assert_snapshot!(format!("hevc_x265_dolby_vision_{name}_mkv"), out);
+    }
+}
+
+#[test]
+fn snapshot_hevc_x265_dolby_vision_profiles_in_mp4() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mp4");
+    // Profiles 8.1 / 8.4 keep the HDR10/HLG fallback readable by non-Dolby-Vision
+    // Apple players (hvc1); Profile 5 has no fallback and is tagged dvh1.
+    for (name, dv, tag) in [
+        ("p5", Dv::P5, "dvh1"),
+        ("p8_1", Dv::P8_1, "hvc1"),
+        ("p8_4", Dv::P8_4, "hvc1"),
+    ] {
+        let out = build_dolby_vision(&job, &profile, dv);
+        assert!(out.contains("-dolbyvision 1"), "{out}");
+        assert!(out.contains(&format!("-tag:v {tag}")), "{out}");
+        assert_eq!(out.matches("-tag:v").count(), 1, "{out}");
+        assert_snapshot!(format!("hevc_x265_dolby_vision_{name}_mp4"), out);
+    }
+}
+
+#[test]
+fn snapshot_av1_svt_dolby_vision_profile_10_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("av1-svt");
+    let job = mk_job("mkv");
+    for (name, dv) in [("p5", Dv::P5), ("p8_1", Dv::P8_1), ("p8_4", Dv::P8_4)] {
+        let plan = EncodePlan::new(VideoEncoder::LibsvtAv1)
+            .with_host(HostPlatform::Linux)
+            .with_dolby_vision(dv);
+        let cmds = build_encode_cmds(&job, &profile, &plan);
+        let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+        assert!(out.contains("-dolbyvision 1"), "{out}");
+        assert!(out.contains("-pix_fmt yuv420p10le"), "{out}");
+        assert_snapshot!(format!("av1_svt_dolby_vision_{name}_mkv"), out);
+    }
+}
+
 #[test]
 fn snapshot_mp4_output_never_maps_attachments_or_copies_subtitles() {
     // Profiles written for MKV map `0:s?`/`0:t?` and copy them; MP4 cannot hold those.
@@ -461,4 +523,103 @@ fn snapshot_windows_vp9_vaapi() {
         VideoEncoder::Vp9Vaapi,
     );
     assert_snapshot!("windows_vp9_vaapi", out);
+}
+
+#[test]
+fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mp4() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mp4");
+    let plan = EncodePlan::new(VideoEncoder::Libx265)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    assert_eq!(cmds.len(), 3);
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    // The output is Profile 8.1, so MP4 is tagged hvc1 (not dvh1).
+    assert!(out.contains("-tag:v hvc1"), "{out}");
+    assert_snapshot!("hevc_x265_dolby_vision_p7_conversion_mp4", out);
+}
+
+#[test]
+fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mkv");
+    let plan = EncodePlan::new(VideoEncoder::Libx265)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    // Extract the HEVC stream, convert with dovi_tool, then encode from the converted
+    // stream with audio, subtitles and metadata from the original.
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(cmds[0].get_program(), "ffmpeg");
+    assert_eq!(cmds[1].get_program(), "dovi_tool");
+    assert_eq!(cmds[2].get_program(), "ffmpeg");
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    assert_snapshot!("hevc_x265_dolby_vision_p7_conversion_mkv", out);
+}
+
+#[test]
+fn snapshot_av1_svt_dolby_vision_profile_7_conversion_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("av1-svt");
+    let job = mk_job("mkv");
+    let plan = EncodePlan::new(VideoEncoder::LibsvtAv1)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    // Same pre-step as HEVC, then the libsvtav1 Dolby Vision encode from the
+    // converted stream with audio, subtitles and metadata from the original.
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(cmds[0].get_program(), "ffmpeg");
+    assert_eq!(cmds[1].get_program(), "dovi_tool");
+    assert_eq!(cmds[2].get_program(), "ffmpeg");
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    assert!(out.contains("-c:v libsvtav1"), "{out}");
+    assert!(out.contains("-dolbyvision 1"), "{out}");
+    assert!(out.contains("-map 1:v:0"), "{out}");
+    assert_snapshot!("av1_svt_dolby_vision_p7_conversion_mkv", out);
+}
+
+/// Colour signalling of a Dolby Vision job follows the source's base layer, never the
+/// user's profile: 8.1 is PQ with HDR10 signalling, 8.4 is HLG without it, Profile 5
+/// has no HDR10 fallback to signal.
+#[test]
+fn snapshot_dolby_vision_colour_follows_the_base_layer_not_the_profile() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    // A PQ profile and an SDR (tonemapping) profile must both be overridden.
+    let mut pq = Profile::get("hevc-x265");
+    pq.colorspace = 9;
+    pq.color_primaries = 9;
+    pq.color_trc = 16;
+    let mut sdr = Profile::get("hevc-x265");
+    sdr.colorspace = 1;
+    sdr.color_primaries = 1;
+    sdr.color_trc = 1;
+    let job = mk_job("mkv");
+    for (pname, profile) in [("pq", &pq), ("sdr", &sdr)] {
+        for (name, dv) in [("p5", Dv::P5), ("p8_1", Dv::P8_1), ("p8_4", Dv::P8_4)] {
+            let out = build_dolby_vision(&job, profile, dv);
+            assert_snapshot!(
+                format!("hevc_x265_dolby_vision_{name}_{pname}_profile"),
+                out
+            );
+        }
+    }
+    let mut av1 = Profile::get("av1-svt");
+    av1.colorspace = 9;
+    av1.color_primaries = 9;
+    av1.color_trc = 16;
+    for (name, dv) in [("p5", Dv::P5), ("p8_1", Dv::P8_1), ("p8_4", Dv::P8_4)] {
+        let plan = EncodePlan::new(VideoEncoder::LibsvtAv1)
+            .with_host(HostPlatform::Linux)
+            .with_dolby_vision(dv);
+        let cmds = build_encode_cmds(&job, &av1, &plan);
+        let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+        assert_snapshot!(format!("av1_svt_dolby_vision_{name}_pq_profile"), out);
+    }
 }

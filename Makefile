@@ -49,7 +49,7 @@ COLOR_GREEN := \033[32m
 COLOR_YELLOW := \033[33m
 COLOR_BLUE := \033[34m
 
-.PHONY: all build release debug install uninstall clean test check fmt clippy help deps install-rust install-ffmpeg docker-build docker-build-dev docker-run docker-dev-shell docker-push check-ui validate-profiles remote-smoke remote-test
+.PHONY: all build release debug install uninstall clean test check fmt clippy ci check-commits help deps install-rust install-ffmpeg docker-build docker-build-dev docker-run docker-dev-shell docker-push check-ui validate-profiles remote-smoke remote-test
 
 # Default target
 all: release
@@ -73,6 +73,8 @@ help:
 	@echo "  $(COLOR_GREEN)make check-ui$(COLOR_RESET)       - Check UI interaction coverage"
 	@echo "  $(COLOR_GREEN)make fmt$(COLOR_RESET)            - Format code with rustfmt"
 	@echo "  $(COLOR_GREEN)make clippy$(COLOR_RESET)         - Lint code with clippy"
+	@echo "  $(COLOR_GREEN)make ci$(COLOR_RESET)             - Run the CI checks (fmt, clippy, tests)"
+	@echo "  $(COLOR_GREEN)make check-commits$(COLOR_RESET)  - Run the CI checks on every commit since BASE (default main)"
 	@echo "  $(COLOR_GREEN)make deps$(COLOR_RESET)           - Install all dependencies"
 	@echo "  $(COLOR_GREEN)make install-rust$(COLOR_RESET)   - Install Rust toolchain"
 	@echo "  $(COLOR_GREEN)make install-ffmpeg$(COLOR_RESET) - Install FFmpeg"
@@ -165,6 +167,23 @@ fmt:
 clippy:
 	@echo "$(COLOR_BLUE)Running clippy...$(COLOR_RESET)"
 	$(CARGO) clippy -- -D warnings
+
+# The same checks as .github/workflows/ci.yml.
+ci:
+	@echo "$(COLOR_BLUE)Running CI checks...$(COLOR_RESET)"
+	$(CARGO) fmt --check
+	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --all-targets --features dev-tools -- -D warnings
+	$(CARGO) test
+	$(CARGO) test --features dev-tools
+
+# Run `make ci` on each commit since BASE, oldest first. Stops at the first failing
+# commit, mid-rebase: fix it, `git commit --amend`, then `git rebase --continue`.
+# --keep-base keeps the branch where it is, so passing commits are not rewritten.
+# Stacked branch: make check-commits BASE=<the branch it is stacked on>
+BASE ?= main
+check-commits:
+	git rebase --keep-base --exec '$(MAKE) ci' $(BASE)
 
 # Dependency installation
 deps: install-rust install-ffmpeg

@@ -6,6 +6,8 @@ use uuid::Uuid;
 pub enum JobStatus {
     Pending,
     Calibrating, // Running Auto-VMAF calibration
+    /// Running the Dolby Vision Conversion pre-step (Profile 7 -> 8.1), before the encode.
+    ConvertingDolbyVision,
     Running,
     Done,
     Failed,
@@ -60,6 +62,10 @@ pub struct VideoJob {
     #[serde(default)]
     pub encoder: Option<String>,
 
+    /// Dolby Vision configuration of the source, read at scan time.
+    #[serde(default)]
+    pub dolby_vision: Option<crate::engine::dolby_vision::DolbyVisionInfo>,
+
     #[serde(skip)]
     pub calibrating_total_steps: Option<u32>, // Total calibration windows across attempts
     #[serde(skip)]
@@ -67,6 +73,12 @@ pub struct VideoJob {
 }
 
 impl VideoJob {
+    /// End the job as Skipped, with the reason the dashboard shows.
+    pub fn skip(&mut self, reason: impl Into<String>) {
+        self.status = JobStatus::Skipped;
+        self.last_error = Some(reason.into());
+    }
+
     /// Create a new pending job
     pub fn new(input_path: PathBuf, output_path: PathBuf, profile: String) -> Self {
         Self {
@@ -96,6 +108,7 @@ impl VideoJob {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         }
     }
 }

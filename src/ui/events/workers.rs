@@ -147,6 +147,21 @@ pub(super) fn handle_worker_message(
             }
             // Don't spawn next job here - wait for WorkerIdle message to avoid race condition
         }
+        WorkerMessage::JobSkipped { job_id, reason } => {
+            // Job planning skipped the job: show it as Skipped with its reason
+            if let Some(job) = state.dashboard.jobs.iter_mut().find(|j| j.id == job_id) {
+                job.skip(reason.clone());
+            }
+            if let Some(ref mut enc_state) = state.enc_state {
+                if let Some(job) = enc_state.jobs.iter_mut().find(|j| j.id == job_id) {
+                    job.skip(reason);
+                }
+                if let Some(ref root) = state.root_path {
+                    let _ = enc_state.save_queue_status(root);
+                }
+            }
+            // Don't spawn next job here - wait for WorkerIdle message to avoid race condition
+        }
         WorkerMessage::JobFailed { job_id, error } => {
             // Mark job as Failed
             if let Some(job) = state.dashboard.jobs.iter_mut().find(|j| j.id == job_id) {
@@ -208,6 +223,10 @@ pub(super) fn spawn_next_job(state: &mut AppState) {
                             // Continue loop to find next encodable job
                             continue;
                         }
+
+                        // Dolby Vision jobs are planned on the worker thread, not here:
+                        // planning runs the lazy Dolby Vision Probe Encode, which blocks.
+                        // A job the plan skips reaches the UI as `JobSkipped`.
 
                         // Found an encodable job
                         break Some(idx);

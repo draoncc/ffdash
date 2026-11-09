@@ -1,0 +1,5 @@
+---
+source: tests/snapshot_commands.rs
+expression: out
+---
+ffmpeg -i /tmp/input.mp4 -progress - -nostats -c:v libx265 -crf 28 -preset medium -dolbyvision 1 -x265-params vbv-bufsize=40000:vbv-maxrate=40000:hrd=1:aud=1:repeat-headers=1 -pix_fmt yuv420p10le -g:v 240 -tag:v dvh1 -map 0:v:0? -map 0:a:0? -c:a:0 aac -b:a:0 128k -map_metadata 0 -map_chapters 0 -y /tmp/output.mp4

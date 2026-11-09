@@ -31,6 +31,26 @@ Typical file sizes:
 - **1080p TV episode**: ~200-400 MB
 - **4K HDR Blu-ray film**: ~10-15 GB (higher for grain-heavy content)
 
+### Dolby Vision
+
+A source with Dolby Vision is either re-encoded with its Dolby Vision carried into the output, or skipped with a visible reason. It is never silently downgraded to plain HDR10 or HLG (and Profile 5 would look broken without its metadata). Preservation is always on; there is no setting to strip it.
+
+- **Codecs and Containers**: HEVC to MKV or MP4 (MP4 is tagged `dvh1` for Profile 5, which has no HDR10 fallback, and `hvc1` otherwise), and AV1 to MKV (kept as Dolby Vision Profile 10; AV1 in MP4 is skipped until it is verified). WebM and VP9 cannot carry Dolby Vision, so those jobs are skipped.
+- **Profiles**: 5, 8.1 and 8.4 are preserved as they are. Profile 7 (dual-layer Blu-ray) is converted to 8.1 first, which needs `dovi_tool` (see below). Other Profiles are skipped.
+- **Encoder**: hardware Encoders can't carry Dolby Vision, so these jobs use the Software Fallback (`libx265` for HEVC, `libsvtav1` for AV1), always 10-bit (Main10 for HEVC).
+- **Capability check**: whether your FFmpeg can encode Dolby Vision is tested with a Probe Encode, lazily, on the first Dolby Vision source of the session, and cached for the rest of it. Libraries without Dolby Vision never pay for it.
+
+When a job is skipped, the reason is shown in the dashboard:
+
+| Skip reason | What to do |
+|-------------|------------|
+| `WebM can't carry Dolby Vision` | Choose the MKV or MP4 Container |
+| `VP9 can't carry Dolby Vision` | Choose HEVC or AV1 |
+| `MP4 can't carry Dolby Vision AV1 yet; use MKV` | Choose the MKV Container for AV1 |
+| `Dolby Vision Profile <profile> isn't supported` | The source's Dolby Vision Profile is not one of 5, 7, 8.1 or 8.4 |
+| `install dovi_tool to convert Dolby Vision Profile 7` | Install `dovi_tool` (Profile 7 only) |
+| `Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision` | Use an FFmpeg build whose software HEVC or AV1 encoder can write Dolby Vision |
+
 ## Prerequisites
 
 ### Required
@@ -54,6 +74,18 @@ brew install ffmpeg
 **Or install both automatically:**
 ```bash
 make deps
+```
+
+### Optional (Dolby Vision Profile 7)
+
+Converting Dolby Vision Profile 7 sources (dual-layer Blu-ray rips) to Profile 8.1 needs `dovi_tool` (https://github.com/quietvoid/dovi_tool) on your `PATH`. Without it those sources are skipped with `install dovi_tool to convert Dolby Vision Profile 7`. Everything else, including Profiles 5, 8.1 and 8.4, works without it. The AUR package lists it as an optional dependency, the Homebrew formula recommends it and the Scoop manifest suggests it; none of them bundle it.
+
+```bash
+# Arch
+sudo pacman -S dovi_tool
+# macOS (or Linux with brew)
+brew install dovi_tool
+# Windows: download dovi_tool.exe from its releases page and put it on PATH
 ```
 
 ### Optional (Hardware Encoding)
@@ -343,6 +375,7 @@ ffmpeg -h encoder=hevc_vaapi    # VA-API HEVC
 - [x] Auto-VMAF quality calibration
 - [x] Two-pass encoding
 - [x] HDR passthrough and tonemapping (uses FFmpeg Hable)
+- [x] Dolby Vision preserved or skipped, never downgraded (HEVC and AV1; Profile 7 needs dovi_tool)
 - [ ] AMD AMF encoding (not tested)
 
 #### Audio

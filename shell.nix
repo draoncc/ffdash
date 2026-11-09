@@ -7,16 +7,20 @@ pkgs.callPackage (
   mkShell {
     nativeBuildInputs =
       with pkgs;
-      lib.optionals stdenv.hostPlatform.isLinux [
+      [
+        # Dolby Vision Profile 7 conversion and its end-to-end check (tests/README.md)
+        dovi-tool
+      ]
+      ++ lib.optionals stdenv.hostPlatform.isLinux [
         lld
-        cargo-xwin
+        xwin
       ];
 
-    # shellHook = ''
-    #   MARKER_FILE=".xwin/sdk/lib/ucrt/x86_64/ucrt.lib"
-    #   if [ ! -f "$MARKER_FILE" ]; then
-    #     xwin --accept-license splat --output .xwin
-    #   fi
-    # '';
+    shellHook = ''
+      MARKER_FILE="$PWD/.xwin-cache/splat/sdk/lib/ucrt/x86_64/ucrt.lib"
+      if [ ! -f "$MARKER_FILE" ]; then
+        xwin --accept-license splat --output "$PWD/.xwin-cache/splat"
+      fi
+    '';
   }
 ) { }

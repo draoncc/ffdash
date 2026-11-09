@@ -237,6 +237,29 @@ pub fn detect_encoder_availability() -> &'static EncoderAvailability {
     CACHE.get_or_init(|| probe_encode::probe_availability(ffmpeg_encoders_output()))
 }
 
+/// Encoder Availability with the Dolby Vision flags set, for a Dolby Vision source.
+///
+/// Runs the Dolby Vision Probe Encode (a few frames of `source` with `-dolbyvision`,
+/// plus the ffprobe Profile 10 check for AV1) for each Encoder that passed the normal
+/// probe ([`detect_encoder_availability`]). Startup probing never does this: FFmpeg
+/// only accepts `-dolbyvision` on frames carrying Dolby Vision RPU metadata, so the
+/// probe needs a real Dolby Vision source (ADR 0001, Amendment).
+///
+/// Each Encoder is probed at most once per session; the result (pass or fail) is
+/// cached, and concurrent callers wait for the one probe instead of repeating it.
+/// Later calls ignore their `source` for Encoders already probed. The returned value
+/// is the normal availability plus `dolby_vision` flags, ready for
+/// [`selection::select_encoder_requiring_dolby_vision`]. Blocking: call it off the UI
+/// thread. Callers must only pass a source that is Dolby Vision.
+pub fn detect_dolby_vision_availability(source: &std::path::Path) -> EncoderAvailability {
+    static CACHE: OnceLock<probe_encode::DolbyVisionCache> = OnceLock::new();
+    probe_encode::probe_dolby_vision(
+        detect_encoder_availability(),
+        CACHE.get_or_init(Default::default),
+        source,
+    )
+}
+
 /// Select the Encoder for `codec` on this host (see [`selection::select_encoder`]).
 pub fn select_encoder(
     codec: &Codec,
@@ -244,13 +267,8 @@ pub fn select_encoder(
     preferred_encoder: Option<&str>,
     bit_depth: u8,
 ) -> VideoEncoder {
-    let kind = match codec {
-        Codec::Vp9(_) => CodecKind::Vp9,
-        Codec::Av1(_) => CodecKind::Av1,
-        Codec::Hevc(_) => CodecKind::Hevc,
-    };
     selection::select_encoder(
-        kind,
+        CodecKind::from(codec),
         use_hardware,
         preferred_encoder.and_then(VideoEncoder::from_ffmpeg_name),
         bit_depth,

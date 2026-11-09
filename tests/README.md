@@ -4,20 +4,62 @@ Comprehensive test coverage for ffdash, including property-based testing and end
 
 ## Test Structure
 
+`tests/*.rs` at the top level are separate test binaries; `integration.rs` pulls in the modules under `integration/`.
+
 ```
 tests/
 ├── README.md                   # This file
-├── integration.rs              # Test entry point
-├── common/                     # Shared utilities
-│   ├── helpers.rs              # Config builders & test utilities
-│   ├── assertions.rs           # FFmpeg command assertions
-│   └── ffmpeg_runner.rs        # E2E FFmpeg execution
-└── integration/                # Test modules
-    ├── ffmpeg_commands.rs      # Command generation tests (37 tests)
-    ├── profile_workflows.rs    # Profile round-trip tests (22 tests)
-    ├── config_state.rs         # UI state management tests (16 tests)
-    └── ffmpeg_e2e.rs           # End-to-end FFmpeg tests (16 tests)
+├── integration.rs              # Entry point for integration/*.rs
+├── common/                     # Shared utilities (config builders, assertions, FFmpeg runner)
+├── integration/                # Command generation, profile round-trips, config state, FFmpeg E2E, ...
+├── snapshot_commands.rs        # insta snapshots of built FFmpeg commands (tests/snapshots/)
+├── encoder_selection.rs        # Encoder selection (pure, no FFmpeg)
+├── dolby_vision_skip.rs        # Dolby Vision skip rules (no FFmpeg, no real file)
+├── dolby_vision_e2e.rs         # Opt-in Dolby Vision check against a real sample
+└── params_*.rs, validation.rs, ...
 ```
+
+## Opt-in checks
+
+These need something CI does not have. They are skipped (and pass) by default.
+
+| Check | How to run | Needs |
+|-------|-----------|-------|
+| Dolby Vision end to end | put samples in `tests/samples/` (or set a sample env var), then `cargo test --test dolby_vision_e2e -- --nocapture` | FFmpeg and ffprobe on `PATH`, a real Dolby Vision file; `dovi_tool` for Profile 7 |
+| Parameter boundary tests | `cargo test --features dev-tools boundary_value_tests -- --ignored` | FFmpeg |
+
+### Dolby Vision end to end
+
+`tests/dolby_vision_e2e.rs` encodes a real Dolby Vision sample with ffdash and asks ffprobe
+whether the output still reports the expected Dolby Vision Profile (ADR 0003).
+
+Keep your samples in `tests/samples/` (git-ignored), named by profile with any extension:
+`dv-p8.1.mkv` and `dv-p7.mkv`, say. Every case whose sample is there runs; the rest are
+skipped, so CI is unaffected. A case's environment variable, when set, names a different file
+and wins over the folder.
+
+`dovi_tool` (needed for the Profile 7 cases) comes with the Nix dev shell (`nix-shell`).
+Elsewhere, install it from https://github.com/quietvoid/dovi_tool/releases and put it on `PATH`.
+
+| Environment variable | Sample in `tests/samples/` | Output | Expected |
+|----------------------|----------------------------|--------|----------|
+| `FFDASH_DV_SAMPLE_HEVC_MKV_P81` | `dv-p8.1.*` (Profile 8.1) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_HEVC_MP4_P81` | `dv-p8.1.*` (Profile 8.1) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_AV1_MKV_P81` | `dv-p8.1.*` (Profile 8.1) | AV1 (`av1-svt`) in MKV | Profile 10 |
+| `FFDASH_DV_SAMPLE_HEVC_MKV_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_HEVC_MP4_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_AV1_MKV_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | AV1 (`av1-svt`) in MKV | Profile 10 |
+
+```bash
+FFDASH_DV_SAMPLE_HEVC_MKV_P81=/path/to/profile8.1-sample.mkv   cargo test --test dolby_vision_e2e -- --nocapture
+```
+
+Use a short clip: the whole file is encoded with the software Encoder (`libx265` or
+`libsvtav1`). A skipped case prints `skipping: <VAR> is not set and tests/samples/<sample>.* does
+not exist`.
+
+To add a case, append a row to `CASES` in `tests/dolby_vision_e2e.rs` (variable name, sample stem, profile id,
+container, expected Dolby Vision Profile) and add it to the table above.
 
 ## Test Categories
 

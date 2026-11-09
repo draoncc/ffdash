@@ -3,6 +3,7 @@ use super::ffmpeg_info::{paths_are_same_file, probe_duration};
 use super::log::write_debug_log;
 use super::profile::{Codec, Profile};
 use super::types::{JobStatus, ProgressParser, VideoJob};
+use crate::engine::planning::{JobPlan, SkipReason};
 use crate::engine::worker::PidRegistry;
 use crate::engine::{hardware, probe};
 use anyhow::{Context, Result};
@@ -11,8 +12,30 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
+mod dolby_vision_conversion;
 mod hevc;
 mod mp4_streams;
+
+use dolby_vision_conversion::{CleanupGuard, ConversionFiles};
+
+/// A command as a shell-style line, for display and the debug log.
+fn command_line(cmd: &Command) -> String {
+    format!(
+        "{} {}",
+        cmd.get_program().to_string_lossy(),
+        cmd.get_args()
+            .map(|arg| {
+                let s = arg.to_string_lossy();
+                if s.contains(' ') {
+                    format!("\"{}\"", s)
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
 
 /// Check if FFmpeg was cancelled by user signal (SIGTERM, SIGINT, SIGQUIT)
 /// Returns true if we should preserve partial output files
@@ -78,6 +101,17 @@ fn resolve_audio_codec(container: &str, requested: &str) -> String {
 /// Apply multi-track audio settings to FFmpeg command
 /// Supports: primary track (passthrough or transcode), AC3 5.1, stereo compatibility
 fn apply_audio_settings(cmd: &mut Command, profile: &Profile, container: &str) {
+    apply_audio_settings_with_video_map(cmd, profile, container, "0:v:0?");
+}
+
+/// [`apply_audio_settings`] with an explicit video stream map (a Dolby Vision
+/// Conversion encodes video from its converted stream, which is input 1).
+fn apply_audio_settings_with_video_map(
+    cmd: &mut Command,
+    profile: &Profile,
+    container: &str,
+    video_map: &str,
+) {
     let allow_passthrough = allow_audio_passthrough(container);
     let is_passthrough = profile.audio_primary_codec == "passthrough";
 
@@ -92,7 +126,7 @@ fn apply_audio_settings(cmd: &mut Command, profile: &Profile, container: &str) {
 
     // IMPORTANT: When using -map, we must explicitly map ALL streams we want.
     // Map video first, then audio tracks.
-    cmd.arg("-map").arg("0:v:0?");
+    cmd.arg("-map").arg(video_map);
 
     // Map the first audio stream for each output track
     for _ in 0..track_count {
@@ -180,6 +214,30 @@ fn apply_color_metadata(cmd: &mut Command, profile: &Profile) {
         cmd.arg("-color_range:v")
             .arg(profile.color_range.to_string());
     }
+}
+
+/// The profile a Dolby Vision job's colour signalling is built from. The output keeps
+/// the source's base layer, so its colourspace, primaries and transfer follow the
+/// source's Dolby Vision Profile instead of the user's profile (which also keeps the
+/// HDR->SDR tonemap and x265's `hdr10` off). Other jobs use the profile as is.
+fn colour_profile<'a>(profile: &'a Profile, plan: &EncodePlan) -> std::borrow::Cow<'a, Profile> {
+    let Some(dolby_vision) = plan.dolby_vision else {
+        return std::borrow::Cow::Borrowed(profile);
+    };
+    let mut profile = profile.clone();
+    match dolby_vision.base_layer_colour() {
+        Some(colour) => {
+            profile.colorspace = colour.colorspace;
+            profile.color_primaries = colour.primaries;
+            profile.color_trc = colour.trc;
+        }
+        None => {
+            profile.colorspace = -1;
+            profile.color_primaries = -1;
+            profile.color_trc = -1;
+        }
+    }
+    std::borrow::Cow::Owned(profile)
 }
 
 fn null_output_target() -> &'static str {
@@ -1181,11 +1239,18 @@ fn build_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
 // ============================================================================
 
 /// Build software AV1 encoding command (libsvtav1)
-fn build_av1_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
+fn build_av1_software_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
+    let profile = &*colour_profile(profile, plan);
     let mut cmd = Command::new("ffmpeg");
 
-    // Input file
+    // Input file; after a Dolby Vision Conversion, video comes from the converted stream.
     cmd.arg("-i").arg(&job.input_path);
+    let video_map = if plan.dolby_vision_conversion {
+        dolby_vision_conversion::apply_converted_input(&mut cmd, job);
+        dolby_vision_conversion::CONVERTED_VIDEO_MAP
+    } else {
+        "0:v:0?"
+    };
 
     // Progress output
     cmd.arg("-progress").arg("-").arg("-nostats");
@@ -1241,8 +1306,16 @@ fn build_av1_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
         cmd.arg("-preset").arg("8");
     }
 
+    // Dolby Vision: libsvtav1 writes Profile 10 from the frame RPU; output is 10-bit.
+    let dolby_vision = plan.dolby_vision.is_some();
+    if dolby_vision {
+        cmd.arg("-dolbyvision").arg("1");
+    }
+
     // Pixel format (default to 10-bit for AV1)
-    if profile.pix_fmt != "auto" {
+    if dolby_vision {
+        cmd.arg("-pix_fmt").arg("yuv420p10le");
+    } else if profile.pix_fmt != "auto" {
         cmd.arg("-pix_fmt").arg(&profile.pix_fmt);
     }
 
@@ -1277,7 +1350,7 @@ fn build_av1_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
 
     // Audio handling (multi-track support)
     let container = container_from_output(job, profile);
-    apply_audio_settings(&mut cmd, profile, &container);
+    apply_audio_settings_with_video_map(&mut cmd, profile, &container, video_map);
 
     // Additional user-provided FFmpeg arguments
     apply_job_additional_args(&mut cmd, job, profile);
@@ -1740,7 +1813,7 @@ fn build_single_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
             hardware::VideoEncoder::Av1Nvenc => build_av1_nvenc_cmd(job, profile, cpu_decode),
             hardware::VideoEncoder::Av1Vaapi => build_av1_vaapi_cmd(job, profile),
             // Software encoders; AMF is not implemented yet and falls back to software.
-            _ => build_av1_software_cmd(job, profile),
+            _ => build_av1_software_cmd(job, profile, plan),
         },
         Codec::Hevc(_) => hevc::build_hevc_cmd(job, profile, plan),
     }
@@ -1755,7 +1828,7 @@ fn build_single_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
 /// The profile is used as given: legacy root fields are not re-synced from the codec
 /// config, so callers pass a profile that is already consistent.
 pub fn build_encode_cmds(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Vec<Command> {
-    build_cmds_inner(job, profile, plan, false)
+    build_cmds_inner(job, profile, plan, false).into_all()
 }
 
 /// Like [`build_encode_cmds`], but first re-syncs the profile's legacy root fields from
@@ -1765,6 +1838,32 @@ pub(crate) fn build_encode_cmds_synced(
     profile: &Profile,
     plan: &EncodePlan,
 ) -> Vec<Command> {
+    build_cmds_inner(job, profile, plan, true).into_all()
+}
+
+/// The commands of a job, split by phase: a Dolby Vision Conversion's pre-step
+/// commands (none for other jobs) and the encode itself (one command, or both
+/// passes of a two-pass encode).
+pub(crate) struct EncodeCommands {
+    pub pre_step: Vec<Command>,
+    pub encode: Vec<Command>,
+}
+
+impl EncodeCommands {
+    fn into_all(self) -> Vec<Command> {
+        let mut all = self.pre_step;
+        all.extend(self.encode);
+        all
+    }
+}
+
+/// [`build_encode_cmds_synced`] with the pre-step and the encode kept apart, for
+/// the encode driver, which runs them as separate phases.
+pub(crate) fn build_encode_commands_synced(
+    job: &VideoJob,
+    profile: &Profile,
+    plan: &EncodePlan,
+) -> EncodeCommands {
     build_cmds_inner(job, profile, plan, true)
 }
 
@@ -1773,7 +1872,7 @@ fn build_cmds_inner(
     profile: &Profile,
     plan: &EncodePlan,
     sync_legacy: bool,
-) -> Vec<Command> {
+) -> EncodeCommands {
     let mut profile = profile.clone();
 
     // Synchronize legacy fields from codec configuration (production paths only)
@@ -1802,7 +1901,10 @@ fn build_cmds_inner(
         let pass2 =
             build_software_cmd_internal(job, &profile, Some(2), Some(&passlog_prefix), None, false);
 
-        return vec![pass1, pass2];
+        return EncodeCommands {
+            pre_step: Vec::new(),
+            encode: vec![pass1, pass2],
+        };
     }
 
     // [Phase 4] Pre-encode validation and clamping (dev-tools only)
@@ -1823,7 +1925,14 @@ fn build_cmds_inner(
         }
     }
 
-    vec![build_single_cmd(job, &profile, plan)]
+    EncodeCommands {
+        pre_step: if plan.dolby_vision_conversion {
+            dolby_vision_conversion::pre_step_cmds(job)
+        } else {
+            Vec::new()
+        },
+        encode: vec![build_single_cmd(job, &profile, plan)],
+    }
 }
 
 /// Build the ffmpeg command(s) for a job, resolving its profile by name and selecting
@@ -1965,11 +2074,25 @@ pub fn encode_job(job: &mut VideoJob) -> Result<()> {
 
 /// The Encode Plan for a profile: the caller's plan when given, else the Encoder
 /// selected for this machine.
-fn plan_for(plan_override: Option<&EncodePlan>, job: &VideoJob, profile: &Profile) -> EncodePlan {
-    plan_override.copied().unwrap_or_else(|| {
+///
+/// A Dolby Vision source goes through job planning, which may skip it: the `Err`
+/// carries the user-facing reason.
+fn plan_for(
+    plan_override: Option<&EncodePlan>,
+    job: &VideoJob,
+    profile: &Profile,
+) -> Result<EncodePlan, SkipReason> {
+    if job.dolby_vision.is_some() {
+        let hardware_requested = plan_override.is_some_and(|p| p.uses_hardware());
+        return match super::encode_plan::plan_job_for_profile(job, profile, hardware_requested) {
+            JobPlan::Encode(plan) => Ok(plan),
+            JobPlan::Skip(reason) => Err(reason),
+        };
+    }
+    Ok(plan_override.copied().unwrap_or_else(|| {
         let depth = super::encode_plan::required_bit_depth(profile, &job.input_path);
         EncodePlan::for_profile(profile, false, depth)
-    })
+    }))
 }
 
 /// Encode a single job with custom progress callback and optional profile override
@@ -1999,6 +2122,25 @@ where
             job.input_path.display()
         );
     }
+
+    // Job planning: choose the Encode Plan before anything is touched, so a job that
+    // must not run (e.g. a Dolby Vision source) ends as Skipped and never starts.
+    let planning_profile = resolve_profile(job, profile_override);
+    // Auto-VMAF calibration windows (below) use this plan without Dolby Vision: they only
+    // score the decoded base layer. The final encode keeps the Dolby Vision plan.
+    let base_plan = match plan_for(plan_override, job, &planning_profile) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            let _ = write_debug_log(&format!(
+                "Skipping {}: {}",
+                job.input_path.display(),
+                reason
+            ));
+            job.skip(reason.to_string());
+            callback(job, &ProgressParser::new());
+            return Ok(());
+        }
+    };
 
     // Safe encoding: write to a temp file, rename on success.
     // This prevents data loss if the encode fails when overwrite=true:
@@ -2047,7 +2189,7 @@ where
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
             // Run calibration
-            let calibration_plan = plan_for(plan_override, job, provided_profile);
+            let calibration_plan = base_plan.without_dolby_vision();
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 provided_profile,
@@ -2114,7 +2256,7 @@ where
 
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
-            let calibration_plan = plan_for(plan_override, job, &loaded_profile);
+            let calibration_plan = base_plan.without_dolby_vision();
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 &loaded_profile,
@@ -2167,7 +2309,7 @@ where
         Some(p) => p.clone(),
         None => resolve_profile(job, None),
     };
-    let mut plan = plan_for(plan_override, job, &resolved_profile);
+    let mut plan = base_plan;
     if let Some(calibrated_quality) = job.calibrated_quality {
         plan = plan.with_quality_override(calibrated_quality);
     }
@@ -2175,32 +2317,23 @@ where
     job.encoder = Some(plan.encoder.ffmpeg_name().to_string());
     callback(job, &ProgressParser::new());
 
-    let cmds = build_encode_cmds_synced(job, &resolved_profile, &plan);
-
-    let cmd_to_string = |cmd: &Command| -> String {
-        format!(
-            "{} {}",
-            cmd.get_program().to_string_lossy(),
-            cmd.get_args()
-                .map(|arg| {
-                    let s = arg.to_string_lossy();
-                    if s.contains(' ') {
-                        format!("\"{}\"", s)
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    };
+    // A Dolby Vision Conversion has its own commands, run before the encode.
+    let EncodeCommands {
+        pre_step: pre_step_cmds,
+        encode: cmds,
+    } = build_encode_commands_synced(job, &resolved_profile, &plan);
+    // Held until the job ends, however it ends: the conversion's temporary files
+    // always go (success, failure, cancel, early return).
+    let _conversion_cleanup = plan
+        .dolby_vision_conversion
+        .then(|| CleanupGuard::new(ConversionFiles::for_output(&job.output_path).paths()));
 
     let selected_encoder = cmds
         .first()
         .and_then(extract_video_encoder_arg)
         .unwrap_or_default();
 
-    let mut cmd_strings = cmds.iter().map(cmd_to_string).collect::<Vec<_>>();
+    let mut cmd_strings = cmds.iter().map(command_line).collect::<Vec<_>>();
 
     if !silent {
         if cmd_strings.len() == 1 {
@@ -2216,6 +2349,26 @@ where
         cmd_strings.join("\n&& \\\n")
     )) {
         let _ = e;
+    }
+
+    // Dolby Vision Conversion pre-step: extract the HEVC stream and convert it to
+    // Profile 8.1, shown as its own phase before the encode starts.
+    if !pre_step_cmds.is_empty() {
+        if let Err(message) = dolby_vision_conversion::run(
+            job,
+            pre_step_cmds,
+            silent,
+            pid_registry.as_ref(),
+            &mut callback,
+        ) {
+            job.status = JobStatus::Failed;
+            job.last_error = Some(message);
+            job.output_path = final_output;
+            anyhow::bail!(
+                "Encoding failed: {}",
+                job.last_error.as_deref().unwrap_or("Unknown error")
+            );
+        }
     }
 
     // Ensure two-pass directory exists (if needed)
@@ -2317,7 +2470,7 @@ where
             let fallback_cmd =
                 build_encode_cmds_synced(job, &resolved_profile, &fallback_plan).remove(0);
 
-            let fallback_cmd_strings = vec![cmd_to_string(&fallback_cmd)];
+            let fallback_cmd_strings = vec![command_line(&fallback_cmd)];
             if !silent {
                 println!("Fallback command: {}", fallback_cmd_strings[0]);
             }

@@ -35,6 +35,9 @@ pub enum WorkerMessage {
     /// Job completed successfully
     JobCompleted { job_id: Uuid },
 
+    /// Job planning skipped the job (e.g. a Dolby Vision source that can't be preserved)
+    JobSkipped { job_id: Uuid, reason: String },
+
     /// Job failed with error
     JobFailed { job_id: Uuid, error: String },
 
@@ -140,6 +143,12 @@ impl WorkerPool {
 
             // Send completion or failure message
             match result {
+                Ok(_) if job.status == JobStatus::Skipped => {
+                    let _ = tx.send(WorkerMessage::JobSkipped {
+                        job_id: job.id,
+                        reason: job.last_error.clone().unwrap_or_default(),
+                    });
+                }
                 Ok(_) => {
                     let _ = tx.send(WorkerMessage::JobCompleted { job_id: job.id });
                 }

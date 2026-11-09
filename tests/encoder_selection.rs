@@ -2,7 +2,9 @@
 //! required bit depth, Encoder Availability), with availability built by hand.
 
 use ffdash::engine::hardware::VideoEncoder::{self, *};
-use ffdash::engine::selection::{CodecKind, EncoderAvailability, select_encoder};
+use ffdash::engine::selection::{
+    CodecKind, EncoderAvailability, select_encoder, select_encoder_requiring_dolby_vision,
+};
 
 fn avail(encoders: &[VideoEncoder]) -> EncoderAvailability {
     encoders
@@ -175,4 +177,66 @@ fn hevc_vaapi_is_selected_when_available_and_falls_back_when_not() {
         select_encoder(CodecKind::Hevc, true, None, 8, &none),
         Libx265
     );
+}
+
+fn dv_avail(plain: &[VideoEncoder], dolby_vision: &[VideoEncoder]) -> EncoderAvailability {
+    let base = avail(plain);
+    dolby_vision
+        .iter()
+        .fold(base, |a, e| a.with_dolby_vision(*e))
+}
+
+#[test]
+fn dolby_vision_job_skips_hardware_and_ends_at_software_fallback_for_hevc() {
+    let a = dv_avail(&[HevcNvenc, HevcQsv, Libx265], &[Libx265]);
+    assert_eq!(
+        select_encoder_requiring_dolby_vision(CodecKind::Hevc, true, None, 10, &a),
+        Libx265
+    );
+}
+
+#[test]
+fn dolby_vision_job_skips_hardware_and_ends_at_software_fallback_for_av1() {
+    let a = dv_avail(&[Av1Nvenc, Av1Amf, Av1Qsv, LibsvtAv1], &[LibsvtAv1]);
+    assert_eq!(
+        select_encoder_requiring_dolby_vision(CodecKind::Av1, true, None, 10, &a),
+        LibsvtAv1
+    );
+}
+
+#[test]
+fn dolby_vision_preference_without_the_flag_is_not_honoured() {
+    let a = dv_avail(&[Av1Nvenc, LibsvtAv1], &[LibsvtAv1]);
+    assert_eq!(
+        select_encoder_requiring_dolby_vision(CodecKind::Av1, true, Some(Av1Nvenc), 10, &a),
+        LibsvtAv1
+    );
+}
+
+#[test]
+fn hardware_encoder_with_the_flag_is_chosen_for_a_dolby_vision_job() {
+    // Mirrors the Main10 rule: the flag, not the vendor, decides.
+    let a = dv_avail(&[HevcNvenc, HevcQsv, Libx265], &[HevcQsv]);
+    assert_eq!(
+        select_encoder_requiring_dolby_vision(CodecKind::Hevc, true, None, 10, &a),
+        HevcQsv
+    );
+}
+
+#[test]
+fn dolby_vision_flag_does_not_change_non_dolby_vision_selection() {
+    let a = dv_avail(&[HevcNvenc, Libx265], &[Libx265]);
+    assert_eq!(
+        select_encoder(CodecKind::Hevc, true, None, 10, &a),
+        HevcNvenc
+    );
+}
+
+#[test]
+fn dolby_vision_flag_is_recorded_per_encoder_alongside_main10() {
+    let a = dv_avail(&[Libx265, HevcNvenc], &[Libx265]);
+    assert!(a.capability(Libx265).unwrap().dolby_vision);
+    assert!(a.capability(Libx265).unwrap().main10);
+    assert!(!a.capability(HevcNvenc).unwrap().dolby_vision);
+    assert!(a.capability(HevcQsv).is_none());
 }

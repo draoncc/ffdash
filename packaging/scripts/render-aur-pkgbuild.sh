@@ -25,6 +25,7 @@ arch=('x86_64')
 url="https://github.com/bcherb2/ffdash"
 license=('MIT')
 depends=('ffmpeg')
+optdepends=('dovi_tool: convert Dolby Vision Profile 7 sources')
 provides=('ffdash')
 conflicts=('ffdash')
 source=(

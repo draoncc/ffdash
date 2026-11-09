@@ -83,6 +83,33 @@ Both are fed from CPU decode on every host (no `-hwaccel`, no device init) and a
 
 The hevc_vaapi preset and lookahead settings (`hw_preset`, `hw_lookahead`) are not used; the config panel shows only Quality (QP) and B-Frames for it.
 
+## Dolby Vision
+
+Dolby Vision is preserved or the job is skipped, never downgraded ([ADR 0003](adr/0003-dolby-vision-is-preserved-or-skipped.md)). Hardware Encoders can't carry it, so a Dolby Vision job uses the Software Fallback for its Codec, always 10-bit.
+
+| Parameter          | HEVC (`libx265`)                                    | AV1 (`libsvtav1`)                         |
+|--------------------|-----------------------------------------------------|-------------------------------------------|
+| Containers         | MKV, MP4                                            | MKV (MP4 is skipped)                      |
+| MP4 tag            | `dvh1` for Profile 5, `hvc1` for 8.1 and 8.4        | n/a                                       |
+| Profiles preserved | 5, 8.1, 8.4; 7 converted to 8.1                     | 5, 8.1, 8.4 and 7 (converted to 8.1), all written as Profile 10 |
+| x265 / SVT-AV1 flags | `-x265-params` adds `vbv-bufsize=40000:vbv-maxrate=40000:hrd=1:aud=1` and `repeat-headers=1` | `-dolbyvision 1` |
+| Skipped            | WebM, other Profiles                                | WebM, MP4, other Profiles                 |
+
+Colour signalling follows the source's base layer, not your profile's colour settings: 8.1 is written as BT.2020 PQ (with x265 `hdr10`), 8.4 as BT.2020 HLG, and Profile 5 is left untagged with no HDR10 fallback. The HDR to SDR tonemap never runs on a Dolby Vision job.
+
+VP9 and WebM can't carry Dolby Vision. Profile 7 is converted with `dovi_tool` (a Dolby Vision Conversion pre-step), so it needs `dovi_tool` on your `PATH`. Whether the software Encoder can write Dolby Vision is decided by a Dolby Vision Probe Encode, run lazily on the first Dolby Vision source of the session and cached. Auto-VMAF calibration windows score the base layer only; the final encode keeps the Dolby Vision.
+
+### Skip reasons
+
+| Reason | Cause |
+|--------|-------|
+| `WebM can't carry Dolby Vision` | Output Container is WebM |
+| `VP9 can't carry Dolby Vision` | Output Codec is VP9 |
+| `MP4 can't carry Dolby Vision AV1 yet; use MKV` | Output Codec is AV1 and Container is MP4 (not yet verified) |
+| `Dolby Vision Profile <profile> isn't supported` | Source Profile is not 5, 7, 8.1 or 8.4 (`<profile>` is the source's, e.g. 8.2 or 10) |
+| `install dovi_tool to convert Dolby Vision Profile 7` | Profile 7 source and `dovi_tool` is missing or not working |
+| `Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision` | The software Encoder did not pass the Dolby Vision Probe Encode |
+
 ## VP9 Encoders
 
 | Parameter        | libvpx-vp9            | vp9_vaapi                       | vp9_qsv                         |

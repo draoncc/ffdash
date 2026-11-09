@@ -371,6 +371,28 @@ impl HelpModal {
             Line::from("  HEVC: mkv by default, mp4 is tagged hvc1; webm is not available"),
             Line::from(""),
             Line::from(vec![Span::styled(
+                "DOLBY VISION",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from("  Always preserved or skipped, never downgraded; no setting"),
+            Line::from("  HEVC to mkv or mp4; AV1 to mkv only (kept as Profile 10)"),
+            Line::from("  Profiles 5, 8.1, 8.4 kept; Profile 7 is converted to 8.1"),
+            Line::from("  Profile 7 needs dovi_tool on your PATH"),
+            Line::from("  Uses the Software Fallback (libx265 / libsvtav1), 10-bit"),
+            Line::from("  FFmpeg support is checked on the first Dolby Vision source"),
+            Line::from("  Skip reasons:"),
+            Line::from("  - WebM can't carry Dolby Vision"),
+            Line::from("  - VP9 can't carry Dolby Vision"),
+            Line::from("  - MP4 can't carry Dolby Vision AV1 yet; use MKV"),
+            Line::from("  - Dolby Vision Profile <profile> isn't supported"),
+            Line::from("  - install dovi_tool to convert Dolby Vision Profile 7"),
+            Line::from(
+                "  - Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision",
+            ),
+            Line::from(""),
+            Line::from(vec![Span::styled(
                 "FPS (Frame Rate Limit)",
                 Style::default()
                     .fg(Color::Yellow)

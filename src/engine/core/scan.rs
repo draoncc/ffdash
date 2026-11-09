@@ -104,6 +104,7 @@ pub fn build_job_from_path(
         }
     };
     job.duration_s = input_info.as_ref().and_then(|i| i.duration_s);
+    job.dolby_vision = input_info.as_ref().and_then(|i| i.dolby_vision);
 
     // Skip detection: check codec before output-exists check so skip reason is accurate
     if skip_vp9_av1 {

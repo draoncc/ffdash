@@ -2,6 +2,8 @@
 
 Hardware encoding used to be gated on `target_os = "linux"` and on GPU detection via `lspci`, which does not exist on Windows or macOS. Opening hardware encoding to all platforms with that approach would hide AMF on Windows and offer QSV on NVIDIA-only machines (common FFmpeg builds ship `*_qsv` regardless of hardware). We decided instead that an Encoder is available only if a short probe encode (a few frames of `lavfi testsrc` to a null output, with the same rate-control mode ffdash will use) succeeds. Results are cached for the session. A separate Main10 probe decides whether 10-bit output can use that Encoder or must take the Software Fallback.
 
+> **Amendment (Dolby Vision):** the Dolby Vision Probe Encode is lazy, not part of startup probing. It runs on a few frames of the session's first Dolby Vision source and is cached per Encoder for the rest of the session, still once per Encoder and only for Encoders that passed the normal probe. Why: FFmpeg's `-dolbyvision` refuses to open the encoder ("could not determine profile and compatibility mode") unless the input frames carry Dolby Vision RPU metadata, so no synthetic `testsrc` probe can pass, and shipping a sample file was rejected.
+
 ## Considered Options
 
 - **OS-specific GPU enumeration** (WMI, `system_profiler`, `lspci`): rejected. It needs three implementations, and it only tells you a GPU exists, not that the driver, runtime, and FFmpeg build can actually encode on it.

@@ -14,7 +14,8 @@ mod vp9_config;
 
 pub use av1_config::{Av1Config, Codec};
 pub use encode_plan::{
-    EncodePlan, HostPlatform, bit_depth_needed, is_ten_bit_pix_fmt, required_bit_depth,
+    EncodePlan, HostPlatform, bit_depth_needed, is_ten_bit_pix_fmt, plan_job_for_profile,
+    required_bit_depth,
 };
 pub(crate) use ffmpeg_cmd::build_encode_cmds_synced;
 pub use ffmpeg_cmd::{
@@ -502,6 +503,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         };
 
         let cmd = build_encode_cmds_synced(
@@ -598,6 +600,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         };
 
         let cmd = build_encode_cmds_synced(
@@ -680,6 +683,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         };
 
         let cmd = build_encode_cmds_synced(
@@ -766,6 +770,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         };
 
         let cmd = build_encode_cmds(
@@ -860,6 +865,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         };
 
         let cmd = build_encode_cmds(

@@ -1,5 +1,41 @@
 use super::*;
 
+// Active Jobs table geometry. The SOURCE column takes whatever the others leave.
+const INDEX_COLUMN_WIDTH: u16 = 3;
+const STATUS_COLUMN_WIDTH: u16 = 12;
+const SOURCE_COLUMN_MIN_WIDTH: u16 = 20;
+const ENCODER_COLUMN_WIDTH: u16 = 12;
+const SIZE_COLUMN_WIDTH: u16 = 10; // IN SIZE and OUT SIZE
+const SPEED_COLUMN_WIDTH: u16 = 8;
+const PROGRESS_COLUMN_WIDTH: u16 = 25; // wide for the bar and percentage
+const ETA_COLUMN_WIDTH: u16 = 10;
+const VMAF_COLUMN_WIDTH: u16 = 10; // result/target, only with Auto-VMAF
+const COLUMN_SPACING: u16 = 2;
+/// The `>> ` marking the selected row.
+const HIGHLIGHT_SYMBOL: &str = ">> ";
+/// Columns other than SOURCE and VMAF.
+const OTHER_COLUMNS: u16 = 8;
+const OTHER_COLUMNS_WIDTH: u16 = INDEX_COLUMN_WIDTH
+    + STATUS_COLUMN_WIDTH
+    + ENCODER_COLUMN_WIDTH
+    + 2 * SIZE_COLUMN_WIDTH
+    + SPEED_COLUMN_WIDTH
+    + PROGRESS_COLUMN_WIDTH
+    + ETA_COLUMN_WIDTH;
+
+/// Width taken from the Active Jobs table by everything but the SOURCE column: the
+/// other columns, the gaps between all columns (SOURCE included) and the
+/// highlight symbol.
+fn fixed_columns_width(auto_vmaf_enabled: bool) -> usize {
+    let vmaf_columns = u16::from(auto_vmaf_enabled);
+    let columns = OTHER_COLUMNS + 1 + vmaf_columns; // + SOURCE
+    let width = OTHER_COLUMNS_WIDTH
+        + vmaf_columns * VMAF_COLUMN_WIDTH
+        + (columns - 1) * COLUMN_SPACING
+        + HIGHLIGHT_SYMBOL.chars().count() as u16;
+    width as usize
+}
+
 impl Dashboard {
     pub(super) fn format_uptime(seconds: u64) -> String {
         let hours = seconds / 3600;
@@ -217,6 +253,11 @@ impl Dashboard {
             .iter()
             .filter(|j| j.status == JobStatus::Running)
             .count();
+        let converting = state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::ConvertingDolbyVision)
+            .count();
         let failed = state
             .jobs
             .iter()
@@ -245,6 +286,16 @@ impl Dashboard {
             stats_spans.extend(vec![
                 Span::raw(" • Calibrating: "),
                 Span::styled(format!("{}", analyzing), Style::default().fg(Color::Cyan)),
+            ]);
+        }
+
+        if converting > 0 {
+            stats_spans.extend(vec![
+                Span::raw(" • Converting Dolby Vision: "),
+                Span::styled(
+                    format!("{}", converting),
+                    Style::default().fg(Color::Magenta),
+                ),
             ]);
         }
 
@@ -387,7 +438,14 @@ impl Dashboard {
             let active_count = state
                 .jobs
                 .iter()
-                .filter(|j| j.status == JobStatus::Running || j.status == JobStatus::Calibrating)
+                .filter(|j| {
+                    matches!(
+                        j.status,
+                        JobStatus::Running
+                            | JobStatus::Calibrating
+                            | JobStatus::ConvertingDolbyVision
+                    )
+                })
                 .count();
             let pending_count = state
                 .jobs
@@ -445,25 +503,25 @@ impl Dashboard {
         let job_count = state.jobs.len();
         if job_count == 0 {
             let mut empty_widths = vec![
-                Constraint::Length(3),  // #
-                Constraint::Length(12), // STATUS
-                Constraint::Min(20),    // SOURCE
-                Constraint::Length(12), // ENCODER
-                Constraint::Length(10), // IN SIZE
-                Constraint::Length(10), // OUT SIZE
-                Constraint::Length(8),  // SPEED
-                Constraint::Length(25), // PROGRESS
-                Constraint::Length(10), // ETA
+                Constraint::Length(INDEX_COLUMN_WIDTH),
+                Constraint::Length(STATUS_COLUMN_WIDTH),
+                Constraint::Min(SOURCE_COLUMN_MIN_WIDTH),
+                Constraint::Length(ENCODER_COLUMN_WIDTH),
+                Constraint::Length(SIZE_COLUMN_WIDTH), // IN SIZE
+                Constraint::Length(SIZE_COLUMN_WIDTH), // OUT SIZE
+                Constraint::Length(SPEED_COLUMN_WIDTH),
+                Constraint::Length(PROGRESS_COLUMN_WIDTH),
+                Constraint::Length(ETA_COLUMN_WIDTH),
             ];
             if auto_vmaf_enabled {
-                empty_widths.push(Constraint::Length(10)); // VMAF
+                empty_widths.push(Constraint::Length(VMAF_COLUMN_WIDTH));
             }
 
             let table = Table::new(Vec::<Row>::new(), empty_widths)
                 .header(header)
-                .column_spacing(2)
+                .column_spacing(COLUMN_SPACING)
                 .row_highlight_style(Style::default().reversed())
-                .highlight_symbol(">> ");
+                .highlight_symbol(HIGHLIGHT_SYMBOL);
 
             let mut render_state = state.table_state.clone();
             frame.render_stateful_widget(table, inner, &mut render_state);
@@ -519,6 +577,12 @@ impl Dashboard {
             etas.push(eta);
         }
 
+        // Width left for the SOURCE column: the table minus the fixed columns, the
+        // column gaps and the highlight symbol (see `widths` below).
+        let source_width = (inner.width as usize)
+            .saturating_sub(fixed_columns_width(auto_vmaf_enabled))
+            .max(SOURCE_COLUMN_MIN_WIDTH as usize);
+
         let rows: Vec<Row> = (offset..end)
             .map(|idx| {
                 let job = &state.jobs[idx];
@@ -560,6 +624,9 @@ impl Dashboard {
                     JobStatus::Failed => ("✗", "Failed", Color::Red, ProgressState::Done),
                     JobStatus::Pending => ("⏸", "Pending", Color::DarkGray, ProgressState::Pending),
                     JobStatus::Skipped => ("⏭", "Skipped", Color::Blue, ProgressState::Done),
+                    JobStatus::ConvertingDolbyVision => {
+                        ("⇄", "Converting", Color::Magenta, ProgressState::Running)
+                    }
                 };
 
                 // Create progress bar
@@ -571,7 +638,19 @@ impl Dashboard {
                     Cell::from(format!("{}", idx + 1)),
                     Cell::from(format!("{} {}", status_icon, status_text))
                         .style(Style::default().fg(status_color)),
-                    Cell::from(filename),
+                    Cell::from(match (&job.status, &job.last_error) {
+                        // A skipped job says why, right next to its name
+                        (JobStatus::Skipped, Some(reason)) => {
+                            Self::skipped_source_label(filename, reason, source_width)
+                        }
+                        // A Profile 7 job names its pre-step phase next to its name
+                        (JobStatus::ConvertingDolbyVision, _) => Self::skipped_source_label(
+                            filename,
+                            "converting Dolby Vision",
+                            source_width,
+                        ),
+                        _ => filename.to_string(),
+                    }),
                     Cell::from(job.encoder.clone().unwrap_or_else(|| "—".to_string())),
                     Cell::from(Line::from(in_size).right_aligned()),
                     Cell::from(Line::from(out_size).right_aligned()),
@@ -608,19 +687,19 @@ impl Dashboard {
             .collect();
 
         let mut widths = vec![
-            Constraint::Length(3),  // #
-            Constraint::Length(12), // STATUS (with icon)
-            Constraint::Min(20),    // SOURCE
-            Constraint::Length(12), // ENCODER
-            Constraint::Length(10), // IN SIZE
-            Constraint::Length(10), // OUT SIZE
-            Constraint::Length(8),  // SPEED
-            Constraint::Length(25), // PROGRESS (wider for bar + percentage)
-            Constraint::Length(10), // ETA
+            Constraint::Length(INDEX_COLUMN_WIDTH),
+            Constraint::Length(STATUS_COLUMN_WIDTH), // with icon
+            Constraint::Min(SOURCE_COLUMN_MIN_WIDTH),
+            Constraint::Length(ENCODER_COLUMN_WIDTH),
+            Constraint::Length(SIZE_COLUMN_WIDTH), // IN SIZE
+            Constraint::Length(SIZE_COLUMN_WIDTH), // OUT SIZE
+            Constraint::Length(SPEED_COLUMN_WIDTH),
+            Constraint::Length(PROGRESS_COLUMN_WIDTH),
+            Constraint::Length(ETA_COLUMN_WIDTH),
         ];
 
         if auto_vmaf_enabled {
-            widths.push(Constraint::Length(10)); // VMAF (result/target)
+            widths.push(Constraint::Length(VMAF_COLUMN_WIDTH));
         }
 
         // Render using a temporary TableState scoped to the visible slice
@@ -629,11 +708,26 @@ impl Dashboard {
 
         let table = Table::new(rows, widths)
             .header(header)
-            .column_spacing(2)
+            .column_spacing(COLUMN_SPACING)
             .row_highlight_style(Style::default().reversed())
-            .highlight_symbol(">> ");
+            .highlight_symbol(HIGHLIGHT_SYMBOL);
 
         frame.render_stateful_widget(table, inner, &mut render_state);
+    }
+
+    /// "name — reason" for a skipped job within `width` columns: the name is
+    /// shortened first so the reason stays readable.
+    fn skipped_source_label(filename: &str, reason: &str, width: usize) -> String {
+        const SEPARATOR: &str = " — ";
+        let reason_len = reason.chars().count();
+        let name_budget = width.saturating_sub(reason_len + SEPARATOR.chars().count());
+        let name_len = filename.chars().count();
+        if name_len <= name_budget.max(4) {
+            return format!("{filename}{SEPARATOR}{reason}");
+        }
+        let keep = name_budget.max(4) - 1;
+        let short: String = filename.chars().take(keep).collect();
+        format!("{short}…{SEPARATOR}{reason}")
     }
 
     fn calculate_raw_job_eta(
@@ -758,6 +852,13 @@ mod tests {
     use std::path::PathBuf;
     use uuid::Uuid;
 
+    #[test]
+    fn fixed_columns_width_is_the_other_columns_gaps_and_highlight_symbol() {
+        // 90 of columns + 8 gaps of 2 + 3 for ">> "; Auto-VMAF adds a 10 column and a gap.
+        assert_eq!(fixed_columns_width(false), 90 + 16 + 3);
+        assert_eq!(fixed_columns_width(true), 100 + 18 + 3);
+    }
+
     fn create_test_job(
         status: JobStatus,
         duration_s: Option<f64>,
@@ -791,6 +892,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         }
     }
 
@@ -829,6 +931,34 @@ mod tests {
         assert!(text.contains("ENCODER"), "{text}");
         assert!(text.contains("av1_nvenc"), "{text}");
         assert!(text.contains("libsvtav1"), "{text}");
+    }
+
+    #[test]
+    fn skipped_job_shows_its_reason_on_the_dashboard() {
+        let mut skipped = VideoJob::new(
+            "/a/a-rather-long-movie-name-2160p-remux.mkv".into(),
+            "/a/dv.out.mkv".into(),
+            "p".into(),
+        );
+        skipped.skip("Dolby Vision Profile 8.1 isn't supported");
+        let plain = VideoJob::new("/a/plain.mkv".into(), "/a/plain.out.mkv".into(), "p".into());
+
+        let text = render_jobs_text(vec![skipped, plain]);
+        assert!(text.contains("Skipped"), "{text}");
+        assert!(
+            text.contains("Dolby Vision Profile 8.1 isn't supported"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn dolby_vision_conversion_phase_is_shown_before_encoding_starts() {
+        let mut converting =
+            VideoJob::new("/a/dv7.mkv".into(), "/a/dv7.out.mkv".into(), "p".into());
+        converting.status = JobStatus::ConvertingDolbyVision;
+        let text = render_jobs_text(vec![converting]);
+        assert!(text.contains("Converting"), "{text}");
+        assert!(text.contains("converting Dolby Vision"), "{text}");
     }
 
     #[test]
