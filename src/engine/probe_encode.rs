@@ -5,7 +5,10 @@
 //! unit-tested. Actually running FFmpeg is not: it is exercised on the real
 //! machine, never against a fake FFmpeg.
 
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::hardware::{self, VideoEncoder};
@@ -130,33 +133,33 @@ pub fn probe_args(
     Some(a)
 }
 
-/// FFmpeg arguments for a Dolby Vision Probe Encode of `encoder`: a few 10-bit
-/// PQ/BT.2020 frames encoded with `-dolbyvision 1`. `None` for Encoders that
-/// cannot carry Dolby Vision at all (every Hardware Encoder, VP9, libaom).
+/// FFmpeg arguments for a Dolby Vision Probe Encode of `encoder`: the first few
+/// frames of the Dolby Vision source at `input`, 10-bit, encoded with
+/// `-dolbyvision 1`. A real source is required because FFmpeg takes the Dolby
+/// Vision profile from the frames' RPU metadata. `None` for Encoders that cannot
+/// carry Dolby Vision at all (every Hardware Encoder, VP9, libaom).
 ///
 /// libx265 is encoded to a null output (success of the encode is the signal; it
 /// needs VBV settings for Dolby Vision HRD). libsvtav1 writes `output`, which
 /// [`run_dolby_vision_probe`] then checks with ffprobe, because an AV1 encode can
 /// succeed without producing a real Dolby Vision stream.
-pub fn dolby_vision_probe_args(encoder: VideoEncoder, output: &str) -> Option<Vec<String>> {
+pub fn dolby_vision_probe_args(
+    encoder: VideoEncoder,
+    input: &str,
+    output: &str,
+) -> Option<Vec<String>> {
     let mut a: Vec<String> = Vec::new();
     let mut push = |items: &[&str]| a.extend(items.iter().map(|s| s.to_string()));
     push(&["-hide_banner", "-loglevel", "error", "-nostdin"]);
     push(&[
-        "-f",
-        "lavfi",
         "-i",
-        "testsrc=size=640x360:rate=30",
+        input,
+        "-map",
+        "0:v:0",
         "-frames:v",
         "5",
         "-pix_fmt",
         "yuv420p10le",
-        "-color_primaries",
-        "bt2020",
-        "-color_trc",
-        "smpte2084",
-        "-colorspace",
-        "bt2020nc",
         "-c:v",
     ]);
     match encoder {
@@ -226,17 +229,18 @@ fn run_probe(encoder: VideoEncoder, bit_depth: u8) -> bool {
     run_with_timeout(cmd)
 }
 
-/// Run one Dolby Vision Probe Encode. True if the encode succeeds and, where
-/// required, ffprobe reports the expected Dolby Vision Profile on the output.
-fn run_dolby_vision_probe(encoder: VideoEncoder) -> bool {
+/// Run one Dolby Vision Probe Encode on `source`. True if the encode succeeds and,
+/// where required, ffprobe reports the expected Dolby Vision Profile on the output.
+fn run_dolby_vision_probe(encoder: VideoEncoder, source: &Path) -> bool {
     let out = std::env::temp_dir().join(format!(
         "ffdash_dv_probe_{}_{}.mkv",
         std::process::id(),
         encoder.ffmpeg_name()
     ));
-    let Some(args) = out
+    let Some(args) = source
         .to_str()
-        .and_then(|o| dolby_vision_probe_args(encoder, o))
+        .zip(out.to_str())
+        .and_then(|(i, o)| dolby_vision_probe_args(encoder, i, o))
     else {
         return false;
     };
@@ -316,21 +320,53 @@ pub fn probe_availability(listing: &str) -> EncoderAvailability {
             availability = availability.with(e, main10);
         }
     }
-    let dv_capable: Vec<VideoEncoder> = std::thread::scope(|s| {
-        let handles: Vec<_> = dolby_vision_candidates(&availability)
-            .into_iter()
-            .map(|e| s.spawn(move || (e, run_dolby_vision_probe(e))))
-            .collect();
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok())
-            .filter_map(|(e, ok)| ok.then_some(e))
-            .collect()
-    });
-    for e in dv_capable {
-        availability = availability.with_dolby_vision(e);
+    availability
+}
+
+/// Session cache of Dolby Vision Probe Encode results, one per Encoder. Concurrent
+/// callers asking about the same Encoder wait for a single probe rather than
+/// running duplicates.
+#[derive(Default)]
+pub struct DolbyVisionCache {
+    cells: Mutex<HashMap<VideoEncoder, Arc<OnceLock<bool>>>>,
+}
+
+impl DolbyVisionCache {
+    /// The cached result for `encoder`, running `probe` if this is the first ask.
+    pub fn get_or_probe(&self, encoder: VideoEncoder, probe: impl FnOnce() -> bool) -> bool {
+        let cell = {
+            let mut cells = self.cells.lock().unwrap_or_else(|e| e.into_inner());
+            Arc::clone(cells.entry(encoder).or_default())
+        };
+        // The map lock is released: only callers for this Encoder block here.
+        *cell.get_or_init(probe)
+    }
+}
+
+/// `base` with the Dolby Vision flag set on every candidate for which `probe`
+/// (consulted through `cache`, so at most once per Encoder) succeeds.
+pub fn dolby_vision_availability(
+    base: &EncoderAvailability,
+    cache: &DolbyVisionCache,
+    mut probe: impl FnMut(VideoEncoder) -> bool,
+) -> EncoderAvailability {
+    let mut availability = base.clone();
+    for e in dolby_vision_candidates(base) {
+        if cache.get_or_probe(e, || probe(e)) {
+            availability = availability.with_dolby_vision(e);
+        }
     }
     availability
+}
+
+/// Dolby Vision Probe Encodes of the candidates against `source`, cached for the
+/// session in `cache`. See [`hardware::detect_dolby_vision_availability`].
+pub fn probe_dolby_vision(
+    base: &EncoderAvailability,
+    cache: &DolbyVisionCache,
+    source: &Path,
+) -> EncoderAvailability {
+    dolby_vision_availability(base, cache, |e| run_dolby_vision_probe(e, source))
 }
 
 /// The Encoders that get a Dolby Vision Probe Encode: only those that already
@@ -344,7 +380,7 @@ pub fn dolby_vision_candidates(availability: &EncoderAvailability) -> Vec<VideoE
                 .copied()
                 .chain([c.software_fallback()])
         })
-        .filter(|e| availability.is_available(*e) && dolby_vision_probe_args(*e, "").is_some())
+        .filter(|e| availability.is_available(*e) && dolby_vision_probe_args(*e, "", "").is_some())
         .collect()
 }
 
@@ -478,30 +514,88 @@ mod tests {
     }
 
     fn dv_joined(e: VideoEncoder) -> String {
-        dolby_vision_probe_args(e, "probe.mkv").unwrap().join(" ")
+        dolby_vision_probe_args(e, "in.mkv", "probe.mkv")
+            .unwrap()
+            .join(" ")
     }
 
     #[test]
     fn only_software_dolby_vision_encoders_have_a_dolby_vision_probe() {
-        assert!(dolby_vision_probe_args(Libx265, "p.mkv").is_some());
-        assert!(dolby_vision_probe_args(LibsvtAv1, "p.mkv").is_some());
+        let args = |e| dolby_vision_probe_args(e, "in.mkv", "p.mkv");
+        assert!(args(Libx265).is_some());
+        assert!(args(LibsvtAv1).is_some());
         for e in hardware_candidates() {
-            assert!(dolby_vision_probe_args(e, "p.mkv").is_none(), "{e:?}");
+            assert!(args(e).is_none(), "{e:?}");
         }
-        assert!(dolby_vision_probe_args(LibvpxVp9, "p.mkv").is_none());
-        assert!(dolby_vision_probe_args(LibaomAv1, "p.mkv").is_none());
+        assert!(args(LibvpxVp9).is_none());
+        assert!(args(LibaomAv1).is_none());
     }
 
     #[test]
-    fn dolby_vision_probe_is_a_few_frame_ten_bit_pq_encode_with_dolbyvision() {
+    fn startup_probing_leaves_dolby_vision_unset() {
+        // Software-only listing: nothing to spawn, so no FFmpeg is involved.
+        let listing = " V....D libx265 libx265 H.265\n V....D libsvtav1 SVT-AV1\n";
+        let a = probe_availability(listing);
+        for e in [Libx265, LibsvtAv1] {
+            assert!(a.is_available(e), "{e:?}");
+            assert!(!a.capability(e).unwrap().dolby_vision, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn dolby_vision_cache_probes_each_encoder_once_even_when_called_concurrently() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = DolbyVisionCache::default();
+        let runs = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    let ok = cache.get_or_probe(Libx265, || {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        true
+                    });
+                    assert!(ok);
+                });
+            }
+        });
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        // Failed results are cached too; other Encoders are independent.
+        assert!(!cache.get_or_probe(LibsvtAv1, || false));
+        assert!(!cache.get_or_probe(LibsvtAv1, || true));
+        assert!(cache.get_or_probe(Libx265, || false));
+    }
+
+    #[test]
+    fn dolby_vision_availability_probes_only_candidates_and_marks_passes() {
+        let base = EncoderAvailability::default()
+            .with(Libx265, true)
+            .with(LibsvtAv1, true)
+            .with(HevcNvenc, true);
+        let cache = DolbyVisionCache::default();
+        let mut probed = Vec::new();
+        let a = dolby_vision_availability(&base, &cache, |e| {
+            probed.push(e);
+            e == Libx265
+        });
+        assert_eq!(probed, vec![LibsvtAv1, Libx265]);
+        assert!(a.capability(Libx265).unwrap().dolby_vision);
+        assert!(!a.capability(LibsvtAv1).unwrap().dolby_vision);
+        assert!(!a.capability(HevcNvenc).unwrap().dolby_vision);
+        // A second source in the session reuses the cache.
+        let a2 = dolby_vision_availability(&base, &cache, |_| panic!("re-probed"));
+        assert_eq!(a2, a);
+    }
+
+    #[test]
+    fn dolby_vision_probe_is_a_few_frame_ten_bit_encode_of_the_source_with_dolbyvision() {
         for e in [Libx265, LibsvtAv1] {
             let s = dv_joined(e);
-            assert!(s.contains("-f lavfi -i testsrc="), "{e:?}");
+            assert!(s.contains("-i in.mkv"), "{e:?}");
+            assert!(!s.contains("lavfi"), "{e:?}");
             assert!(s.contains("-frames:v 5"), "{e:?}");
+            assert!(s.contains("-map 0:v:0"), "{e:?}");
             assert!(s.contains("-pix_fmt yuv420p10le"), "{e:?}");
-            assert!(s.contains("-color_primaries bt2020"), "{e:?}");
-            assert!(s.contains("-color_trc smpte2084"), "{e:?}");
-            assert!(s.contains("-colorspace bt2020nc"), "{e:?}");
             assert!(s.contains("-dolbyvision 1"), "{e:?}");
             assert!(s.contains(&format!("-c:v {}", e.ffmpeg_name())), "{e:?}");
         }
