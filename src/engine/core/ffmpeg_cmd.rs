@@ -2018,6 +2018,8 @@ where
     // Job planning: choose the Encode Plan before anything is touched, so a job that
     // must not run (e.g. a Dolby Vision source) ends as Skipped and never starts.
     let planning_profile = resolve_profile(job, profile_override);
+    // Auto-VMAF calibration windows (below) use this plan without Dolby Vision: they only
+    // score the decoded base layer. The final encode keeps the Dolby Vision plan.
     let base_plan = match plan_for(plan_override, job, &planning_profile) {
         Ok(plan) => plan,
         Err(reason) => {
@@ -2079,7 +2081,7 @@ where
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
             // Run calibration
-            let calibration_plan = base_plan;
+            let calibration_plan = base_plan.without_dolby_vision();
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 provided_profile,
@@ -2146,7 +2148,7 @@ where
 
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
-            let calibration_plan = base_plan;
+            let calibration_plan = base_plan.without_dolby_vision();
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 &loaded_profile,

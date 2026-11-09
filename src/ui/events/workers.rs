@@ -147,6 +147,21 @@ pub(super) fn handle_worker_message(
             }
             // Don't spawn next job here - wait for WorkerIdle message to avoid race condition
         }
+        WorkerMessage::JobSkipped { job_id, reason } => {
+            // Job planning skipped the job: show it as Skipped with its reason
+            if let Some(job) = state.dashboard.jobs.iter_mut().find(|j| j.id == job_id) {
+                job.skip(reason.clone());
+            }
+            if let Some(ref mut enc_state) = state.enc_state {
+                if let Some(job) = enc_state.jobs.iter_mut().find(|j| j.id == job_id) {
+                    job.skip(reason);
+                }
+                if let Some(ref root) = state.root_path {
+                    let _ = enc_state.save_queue_status(root);
+                }
+            }
+            // Don't spawn next job here - wait for WorkerIdle message to avoid race condition
+        }
         WorkerMessage::JobFailed { job_id, error } => {
             // Mark job as Failed
             if let Some(job) = state.dashboard.jobs.iter_mut().find(|j| j.id == job_id) {
@@ -209,28 +224,9 @@ pub(super) fn spawn_next_job(state: &mut AppState) {
                             continue;
                         }
 
-                        // Job planning: a job the plan skips (e.g. a Dolby Vision source)
-                        // ends as Skipped with its reason and never reaches a worker.
-                        if job.dolby_vision.is_some() {
-                            let plan_profile = enc_state
-                                .profile_config
-                                .clone()
-                                .unwrap_or_else(|| crate::engine::Profile::get(&job.profile));
-                            let hardware_requested = state.config.use_hardware_encoding
-                                && state.config.hw_encoding_available == Some(true);
-                            if let crate::engine::planning::JobPlan::Skip(reason) =
-                                crate::engine::plan_job_for_profile(
-                                    &job,
-                                    &plan_profile,
-                                    hardware_requested,
-                                )
-                            {
-                                job.skip(reason);
-                                enc_state.jobs[idx] = job.clone();
-                                state.dashboard.jobs[idx] = job;
-                                continue;
-                            }
-                        }
+                        // Dolby Vision jobs are planned on the worker thread, not here:
+                        // planning runs the lazy Dolby Vision Probe Encode, which blocks.
+                        // A job the plan skips reaches the UI as `JobSkipped`.
 
                         // Found an encodable job
                         break Some(idx);
