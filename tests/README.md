@@ -4,20 +4,50 @@ Comprehensive test coverage for ffdash, including property-based testing and end
 
 ## Test Structure
 
+`tests/*.rs` at the top level are separate test binaries; `integration.rs` pulls in the modules under `integration/`.
+
 ```
 tests/
 ├── README.md                   # This file
-├── integration.rs              # Test entry point
-├── common/                     # Shared utilities
-│   ├── helpers.rs              # Config builders & test utilities
-│   ├── assertions.rs           # FFmpeg command assertions
-│   └── ffmpeg_runner.rs        # E2E FFmpeg execution
-└── integration/                # Test modules
-    ├── ffmpeg_commands.rs      # Command generation tests (37 tests)
-    ├── profile_workflows.rs    # Profile round-trip tests (22 tests)
-    ├── config_state.rs         # UI state management tests (16 tests)
-    └── ffmpeg_e2e.rs           # End-to-end FFmpeg tests (16 tests)
+├── integration.rs              # Entry point for integration/*.rs
+├── common/                     # Shared utilities (config builders, assertions, FFmpeg runner)
+├── integration/                # Command generation, profile round-trips, config state, FFmpeg E2E, ...
+├── snapshot_commands.rs        # insta snapshots of built FFmpeg commands (tests/snapshots/)
+├── encoder_selection.rs        # Encoder selection (pure, no FFmpeg)
+├── dolby_vision_skip.rs        # Dolby Vision skip rules (no FFmpeg, no real file)
+├── dolby_vision_e2e.rs         # Opt-in Dolby Vision check against a real sample
+└── params_*.rs, validation.rs, ...
 ```
+
+## Opt-in checks
+
+These need something CI does not have. They are skipped (and pass) by default.
+
+| Check | How to run | Needs |
+|-------|-----------|-------|
+| Dolby Vision end to end | set a sample env var, then `cargo test --test dolby_vision_e2e -- --nocapture` | FFmpeg and ffprobe on `PATH`, a real Dolby Vision file |
+| Parameter boundary tests | `cargo test --features dev-tools boundary_value_tests -- --ignored` | FFmpeg |
+
+### Dolby Vision end to end
+
+`tests/dolby_vision_e2e.rs` encodes a real Dolby Vision sample with ffdash and asks ffprobe
+whether the output still reports the expected Dolby Vision Profile (ADR 0003). Each case is
+enabled by its own environment variable, which names the sample file. A case whose variable is
+unset is skipped, so CI is unaffected.
+
+| Environment variable | Sample | Output | Expected |
+|----------------------|--------|--------|----------|
+| `FFDASH_DV_SAMPLE_HEVC_MKV_P81` | Dolby Vision Profile 8.1 | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
+
+```bash
+FFDASH_DV_SAMPLE_HEVC_MKV_P81=/path/to/profile8.1-sample.mkv   cargo test --test dolby_vision_e2e -- --nocapture
+```
+
+Use a short clip: the whole file is encoded with the software encoder (`libx265`). Without the
+variable the test prints `skipping: <VAR> is not set`.
+
+To add a case, append a row to `CASES` in `tests/dolby_vision_e2e.rs` (variable name, profile id,
+container, expected Dolby Vision Profile) and add it to the table above.
 
 ## Test Categories
 
