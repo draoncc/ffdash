@@ -32,6 +32,8 @@ class Ffdash < Formula
     end
   end
 
+  depends_on "dovi_tool" => :recommended
+
   def install
     bin.install "ffdash"
   end

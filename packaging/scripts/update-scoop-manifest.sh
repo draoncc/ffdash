@@ -29,6 +29,9 @@ cat > "$output_path" <<EOF
   "bin": [
     "ffdash.exe"
   ],
+  "suggest": {
+    "dovi_tool": ["dovi_tool"]
+  },
   "checkver": {
     "github": "https://github.com/bcherb2/ffdash"
   },
