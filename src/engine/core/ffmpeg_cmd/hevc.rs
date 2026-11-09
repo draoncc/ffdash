@@ -29,7 +29,7 @@ mod vaapi;
 pub(super) fn build_hevc_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
     let cpu_decode = plan.host.decodes_on_cpu();
     match plan.encoder {
-        VideoEncoder::Libx265 => x265::build(job, profile),
+        VideoEncoder::Libx265 => x265::build(job, profile, plan),
 
         // Hardware Encoders: each arm moves to its own module when its ticket lands.
         // Until then they build the Software Fallback command.
@@ -45,7 +45,7 @@ pub(super) fn build_hevc_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePla
         VideoEncoder::HevcVideotoolbox => videotoolbox::build(job, profile),
 
         // Not HEVC Encoders: the Software Fallback.
-        _ => x265::build(job, profile),
+        _ => x265::build(job, profile, plan),
     }
 }
 

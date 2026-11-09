@@ -7,6 +7,7 @@ use super::super::{
     apply_audio_settings, apply_color_metadata, apply_job_additional_args, fps_scale_filters,
 };
 use super::apply_hevc_container_tag;
+use crate::engine::core::encode_plan::EncodePlan;
 use crate::engine::core::is_ten_bit_pix_fmt;
 use crate::engine::core::profile::Profile;
 use crate::engine::core::types::VideoJob;
@@ -15,15 +16,23 @@ use crate::engine::probe;
 /// HDR10 signalling for x265. Colour primaries/transfer/matrix reach the stream through
 /// the shared `-color_*` flags; mastering display and content light level are carried
 /// over from the source frames by FFmpeg's libx265 wrapper.
-fn x265_params(profile: &Profile) -> Option<String> {
+fn x265_params(profile: &Profile, dolby_vision: bool) -> Option<String> {
     let mut params = Vec::new();
     if profile.color_trc == 16 {
         // PQ transfer: HDR10 signalling.
         params.push("hdr10=1");
-        if is_ten_bit_pix_fmt(&profile.pix_fmt) {
+        if dolby_vision || is_ten_bit_pix_fmt(&profile.pix_fmt) {
             params.push("hdr10-opt=1");
         }
         params.push("repeat-headers=1");
+    }
+    if dolby_vision {
+        // x265 refuses Dolby Vision without VBV/HRD settings; the access unit
+        // delimiters and repeated headers let players find the RPU NAL units.
+        params.extend(["vbv-bufsize=40000", "vbv-maxrate=40000", "hrd=1", "aud=1"]);
+        if !params.contains(&"repeat-headers=1") {
+            params.push("repeat-headers=1");
+        }
     }
     if params.is_empty() {
         None
@@ -32,7 +41,7 @@ fn x265_params(profile: &Profile) -> Option<String> {
     }
 }
 
-pub(super) fn build(job: &VideoJob, profile: &Profile) -> Command {
+pub(super) fn build(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
     let mut cmd = Command::new("ffmpeg");
     let hevc = profile.codec.hevc_or_default();
 
@@ -45,12 +54,19 @@ pub(super) fn build(job: &VideoJob, profile: &Profile) -> Command {
     if hevc.x265_tune != "none" {
         cmd.arg("-tune").arg(&hevc.x265_tune);
     }
-    if let Some(params) = x265_params(profile) {
+    let dolby_vision = plan.dolby_vision.is_some();
+    if dolby_vision {
+        cmd.arg("-dolbyvision").arg("1");
+    }
+    if let Some(params) = x265_params(profile, dolby_vision) {
         cmd.arg("-x265-params").arg(params);
     }
 
     // Pixel format: 10-bit gives Main10; "auto" keeps the source's depth.
-    if profile.pix_fmt != "auto" {
+    // Dolby Vision output is always Main10.
+    if dolby_vision {
+        cmd.arg("-pix_fmt").arg("yuv420p10le");
+    } else if profile.pix_fmt != "auto" {
         cmd.arg("-pix_fmt").arg(&profile.pix_fmt);
     }
 
