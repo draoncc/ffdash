@@ -526,6 +526,23 @@ fn snapshot_windows_vp9_vaapi() {
 }
 
 #[test]
+fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mp4() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mp4");
+    let plan = EncodePlan::new(VideoEncoder::Libx265)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    assert_eq!(cmds.len(), 3);
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    // The output is Profile 8.1, so MP4 is tagged hvc1 (not dvh1).
+    assert!(out.contains("-tag:v hvc1"), "{out}");
+    assert_snapshot!("hevc_x265_dolby_vision_p7_conversion_mp4", out);
+}
+
+#[test]
 fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mkv() {
     use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
     let profile = Profile::get("hevc-x265");

@@ -1,0 +1,7 @@
+---
+source: tests/snapshot_commands.rs
+expression: out
+---
+ffmpeg -i /tmp/input.mp4 -progress - -nostats -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc -y /tmp/output.mp4.dv-source.hevc
+dovi_tool -m 2 convert --discard -i /tmp/output.mp4.dv-source.hevc -o /tmp/output.mp4.dv-8-1.hevc
+ffmpeg -i /tmp/input.mp4 -i /tmp/output.mp4.dv-8-1.hevc -progress - -nostats -c:v libx265 -crf 28 -preset medium -dolbyvision 1 -x265-params vbv-bufsize=40000:vbv-maxrate=40000:hrd=1:aud=1:repeat-headers=1 -pix_fmt yuv420p10le -g:v 240 -tag:v hvc1 -map 1:v:0 -map 0:a:0? -c:a:0 aac -b:a:0 128k -map_metadata 0 -map_chapters 0 -y /tmp/output.mp4

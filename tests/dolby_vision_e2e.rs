@@ -42,6 +42,19 @@ const CASES: &[Case] = &[
         container: "mkv",
         expected_profile: "10",
     },
+    // Profile 7 is converted to 8.1 first; needs `dovi_tool` on PATH.
+    Case {
+        env_var: "FFDASH_DV_SAMPLE_HEVC_MKV_P7",
+        profile: "hevc-x265",
+        container: "mkv",
+        expected_profile: "8.1",
+    },
+    Case {
+        env_var: "FFDASH_DV_SAMPLE_HEVC_MP4_P7",
+        profile: "hevc-x265",
+        container: "mp4",
+        expected_profile: "8.1",
+    },
 ];
 
 /// The sample path a case's environment variable names, if it names one.

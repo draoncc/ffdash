@@ -467,6 +467,35 @@ mod tests {
     }
 
     #[test]
+    fn hevc_mp4_profile_7_with_dovi_tool_converts_to_8_1_on_libx265() {
+        let avail = dv_availability();
+        let req = PlanRequest {
+            dovi_tool: true,
+            ..request(CodecKind::Hevc, "mp4", Some(DolbyVisionProfile::P7), &avail)
+        };
+        assert_eq!(
+            plan_job(&req),
+            JobPlan::Encode(
+                EncodePlan::new(Libx265)
+                    .with_dolby_vision(DolbyVisionProfile::P8_1)
+                    .with_dolby_vision_conversion()
+            )
+        );
+    }
+
+    #[test]
+    fn profile_7_without_dovi_tool_skips_in_mp4_too() {
+        let avail = dv_availability();
+        let plan = plan_job(&request(
+            CodecKind::Hevc,
+            "mp4",
+            Some(DolbyVisionProfile::P7),
+            &avail,
+        ));
+        assert_eq!(plan, JobPlan::Skip(DOVI_TOOL_MISSING_REASON.to_string()));
+    }
+
+    #[test]
     fn profile_7_without_dovi_tool_skips_with_an_install_reason() {
         let avail = dv_availability();
         let plan = plan_job(&request(
