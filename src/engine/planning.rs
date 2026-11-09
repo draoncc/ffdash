@@ -47,16 +47,28 @@ pub fn plan_job(req: &PlanRequest) -> JobPlan {
 }
 
 /// A Dolby Vision source is preserved or skipped with a reason, never downgraded
-/// (ADR 0003). Only HEVC in MKV or MP4 with Profile 5, 8.1 or 8.4 is preserved so far; the
-/// other cases are skipped until their tickets land.
+/// (ADR 0003). Profiles 5, 8.1 and 8.4 are preserved in HEVC (MKV, MP4; Profile 7
+/// has its own ticket) and in AV1 (MKV, MP4; as Profile 10). The Container
+/// check comes first and applies to every codec, so a WebM output skips with the
+/// right reason even though HEVC-to-WebM is coerced to MKV when the output path is
+/// built.
 fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan {
-    let preservable = req.codec == CodecKind::Hevc
-        && matches!(req.container, "mkv" | "mp4")
-        && matches!(
-            profile,
-            DolbyVisionProfile::P5 | DolbyVisionProfile::P8_1 | DolbyVisionProfile::P8_4
-        );
-    if !preservable {
+    if req.container == "webm" {
+        return JobPlan::Skip("WebM can't carry Dolby Vision".to_string());
+    }
+    if req.codec == CodecKind::Vp9 {
+        return JobPlan::Skip("VP9 can't carry Dolby Vision".to_string());
+    }
+    let profile_ok = matches!(
+        profile,
+        DolbyVisionProfile::P5 | DolbyVisionProfile::P8_1 | DolbyVisionProfile::P8_4
+    );
+    let container_ok = match req.codec {
+        CodecKind::Hevc => matches!(req.container, "mkv" | "mp4"),
+        CodecKind::Av1 => matches!(req.container, "mkv" | "mp4"),
+        CodecKind::Vp9 => false,
+    };
+    if !(profile_ok && container_ok) {
         return JobPlan::Skip(format!("Dolby Vision Profile {profile} not supported yet"));
     }
 
@@ -224,33 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn dolby_vision_cases_without_a_ticket_yet_are_skipped_with_their_profile() {
-        let avail = dv_availability();
-        let not_yet = |profile: DolbyVisionProfile, codec, container| {
-            let plan = plan_job(&request(codec, container, Some(profile), &avail));
-            assert_eq!(
-                plan,
-                JobPlan::Skip(format!("Dolby Vision Profile {profile} not supported yet")),
-                "{profile} {codec:?} {container}"
-            );
-        };
-        for profile in ALL_PROFILES {
-            // AV1 and VP9 in any Container
-            for container in ["mkv", "mp4", "webm"] {
-                not_yet(profile, CodecKind::Av1, container);
-                not_yet(profile, CodecKind::Vp9, container);
-            }
-            // HEVC in WebM
-            not_yet(profile, CodecKind::Hevc, "webm");
-        }
-        // Profile 7 and other profiles in MKV and MP4 HEVC
-        for container in ["mkv", "mp4"] {
-            not_yet(DolbyVisionProfile::P7, CodecKind::Hevc, container);
-            not_yet(ALL_PROFILES[4], CodecKind::Hevc, container);
-        }
-    }
-
-    #[test]
     fn hevc_mp4_preserves_profiles_5_8_1_and_8_4_on_libx265() {
         let avail = dv_availability();
         for profile in [
@@ -281,6 +266,145 @@ mod tests {
             };
             assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
         }
+    }
+
+    const PRESERVABLE: [DolbyVisionProfile; 3] = [
+        DolbyVisionProfile::P5,
+        DolbyVisionProfile::P8_1,
+        DolbyVisionProfile::P8_4,
+    ];
+
+    fn skip_reason(plan: JobPlan) -> String {
+        match plan {
+            JobPlan::Skip(reason) => reason,
+            other => panic!("expected a skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn av1_mkv_and_mp4_preserve_profiles_5_8_1_and_8_4_on_libsvtav1() {
+        let avail = dv_availability();
+        for container in ["mkv", "mp4"] {
+            for profile in PRESERVABLE {
+                let plan = plan_job(&request(CodecKind::Av1, container, Some(profile), &avail));
+                assert_eq!(
+                    plan,
+                    JobPlan::Encode(EncodePlan::new(LibsvtAv1).with_dolby_vision(profile)),
+                    "{profile} {container}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn av1_dolby_vision_job_falls_back_to_libsvtav1_with_hardware_selected_or_preferred() {
+        // Av1Nvenc is available with Main10 but has no Dolby Vision flag.
+        let avail = dv_availability();
+        for preferred in [None, Some(Av1Nvenc)] {
+            let req = PlanRequest {
+                preferred,
+                ..request(
+                    CodecKind::Av1,
+                    "mkv",
+                    Some(DolbyVisionProfile::P8_1),
+                    &avail,
+                )
+            };
+            let JobPlan::Encode(plan) = plan_job(&req) else {
+                panic!("expected an Encode Plan");
+            };
+            assert_eq!(plan.encoder, LibsvtAv1);
+        }
+    }
+
+    #[test]
+    fn av1_without_a_dolby_vision_capable_encoder_skips_with_an_upgrade_ffmpeg_reason() {
+        let avail = availability(); // no Dolby Vision flags
+        // Only libx265 passed: AV1 still has no Dolby Vision-capable Encoder.
+        let hevc_only = availability().with_dolby_vision(Libx265);
+        for avail in [&avail, &hevc_only] {
+            for container in ["mkv", "mp4"] {
+                for profile in PRESERVABLE {
+                    let reason = skip_reason(plan_job(&request(
+                        CodecKind::Av1,
+                        container,
+                        Some(profile),
+                        avail,
+                    )));
+                    assert_eq!(
+                        reason,
+                        "Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn webm_skips_any_dolby_vision_source_because_webm_cannot_carry_it() {
+        let avail = dv_availability();
+        for codec in CodecKind::ALL {
+            for profile in ALL_PROFILES {
+                let reason = skip_reason(plan_job(&request(codec, "webm", Some(profile), &avail)));
+                assert_eq!(
+                    reason, "WebM can't carry Dolby Vision",
+                    "{profile} {codec:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vp9_skips_any_dolby_vision_source_because_vp9_cannot_carry_it() {
+        let avail = dv_availability();
+        for container in ["mkv", "mp4"] {
+            for profile in ALL_PROFILES {
+                let reason = skip_reason(plan_job(&request(
+                    CodecKind::Vp9,
+                    container,
+                    Some(profile),
+                    &avail,
+                )));
+                assert_eq!(
+                    reason, "VP9 can't carry Dolby Vision",
+                    "{profile} {container}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_profiles_skip_naming_the_profile_for_av1_and_hevc() {
+        let avail = dv_availability();
+        let p8_2 = DolbyVisionProfile::Other {
+            profile: 8,
+            compat_id: 2,
+        };
+        for profile in [DolbyVisionProfile::P7, ALL_PROFILES[4], p8_2] {
+            for (codec, container) in [
+                (CodecKind::Av1, "mkv"),
+                (CodecKind::Av1, "mp4"),
+                (CodecKind::Hevc, "mkv"),
+                (CodecKind::Hevc, "mp4"),
+            ] {
+                let reason =
+                    skip_reason(plan_job(&request(codec, container, Some(profile), &avail)));
+                assert_eq!(
+                    reason,
+                    format!("Dolby Vision Profile {profile} not supported yet"),
+                    "{profile} {codec:?} {container}"
+                );
+            }
+        }
+        assert!(
+            skip_reason(plan_job(&request(
+                CodecKind::Av1,
+                "mkv",
+                Some(p8_2),
+                &avail
+            )))
+            .contains("8.2")
+        );
     }
 
     #[test]
