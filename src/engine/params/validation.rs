@@ -281,7 +281,36 @@ fn extract_profile_field(profile: &Profile, field_name: &str) -> Option<Value> {
     use crate::engine::core::Codec;
 
     match field_name {
-        "crf" => Some(Value::U32(profile.crf)),
+        "crf" => match &profile.codec {
+            Codec::Hevc(hevc) => Some(Value::U32(hevc.x265_crf)),
+            _ => Some(Value::U32(profile.crf)),
+        },
+        // HEVC settings: one arm per field. Hardware Encoder tickets add theirs.
+        "x265_preset" => profile
+            .codec
+            .as_hevc()
+            .map(|h| Value::String(h.x265_preset.clone())),
+        "x265_tune" => profile
+            .codec
+            .as_hevc()
+            .map(|h| Value::String(h.x265_tune.clone())),
+        "qsv_quality" => profile.codec.as_hevc().map(|h| Value::U32(h.qsv_quality)),
+        "hevc_hw_preset" => profile
+            .codec
+            .as_hevc()
+            .map(|h| Value::String(h.hw_preset.clone())),
+        "hevc_hw_lookahead" => profile.codec.as_hevc().map(|h| Value::U32(h.hw_lookahead)),
+        "hevc_hw_b_frames" => profile.codec.as_hevc().map(|h| Value::U32(h.hw_b_frames)),
+        "hevc_hw_rc_mode" => profile
+            .codec
+            .as_hevc()
+            .map(|h| Value::String(h.hw_rc_mode.clone())),
+        "hevc_nvenc_quality" => profile.codec.as_hevc().map(|h| Value::U32(h.nvenc_quality)),
+        "amf_qp" => profile.codec.as_hevc().map(|h| Value::U32(h.amf_qp)),
+        "videotoolbox_q" => profile
+            .codec
+            .as_hevc()
+            .map(|h| Value::U32(h.videotoolbox_q)),
         "cpu_used" => {
             // Read from codec config if available
             match &profile.codec {
@@ -319,29 +348,31 @@ fn extract_profile_field(profile: &Profile, field_name: &str) -> Option<Value> {
             Codec::Vp9(vp9) => Some(Value::I32(vp9.aq_mode)),
             _ => Some(Value::I32(profile.aq_mode)),
         },
-        "hw_global_quality" => {
-            // Read from codec config (source of truth for hardware encoding)
-            match &profile.codec {
-                Codec::Vp9(vp9) if profile.use_hardware_encoding => {
-                    Some(Value::U32(vp9.hw_global_quality))
-                }
-                Codec::Av1(av1) if profile.use_hardware_encoding => Some(Value::U32(av1.hw_cq)),
-                _ => Some(Value::U32(profile.hw_global_quality)),
-            }
-        }
-        "hw_rc_mode" => Some(Value::U32(profile.hw_rc_mode)),
-        "hw_b_frames" => Some(Value::U32(profile.hw_b_frames)),
-        "hw_compression_level" => match &profile.codec {
-            Codec::Vp9(vp9) => Some(Value::U32(vp9.hw_compression_level)),
-            _ => Some(Value::U32(profile.hw_compression_level)),
+        "hw_global_quality" => match &profile.codec {
+            Codec::Vp9(vp9) => Some(Value::U32(vp9.hw_global_quality)),
+            Codec::Av1(av1) if profile.use_hardware_encoding => Some(Value::U32(av1.hw_cq)),
+            Codec::Av1(_) | Codec::Hevc(_) => None,
         },
+        "hw_rc_mode" => profile.codec.as_vp9().map(|v| Value::U32(v.hw_rc_mode)),
+        "hw_b_frames" => match &profile.codec {
+            Codec::Vp9(vp9) => Some(Value::U32(vp9.hw_b_frames)),
+            Codec::Hevc(hevc) => Some(Value::U32(hevc.hw_b_frames)),
+            Codec::Av1(_) => None,
+        },
+        "vaapi_quality" => profile.codec.as_hevc().map(|h| Value::U32(h.vaapi_quality)),
+        "hw_compression_level" => profile
+            .codec
+            .as_vp9()
+            .map(|v| Value::U32(v.hw_compression_level)),
         "hw_denoise" => match &profile.codec {
             Codec::Vp9(vp9) => Some(Value::U32(vp9.hw_denoise)),
             Codec::Av1(av1) => Some(Value::U32(av1.hw_denoise)),
+            Codec::Hevc(_) => None,
         },
         "hw_detail" => match &profile.codec {
             Codec::Vp9(vp9) => Some(Value::U32(vp9.hw_detail)),
             Codec::Av1(av1) => Some(Value::U32(av1.hw_detail)),
+            Codec::Hevc(_) => None,
         },
         "arnr_max_frames" => match &profile.codec {
             Codec::Vp9(vp9) => Some(Value::U32(vp9.arnr_max_frames)),
@@ -363,18 +394,14 @@ fn extract_profile_field(profile: &Profile, field_name: &str) -> Option<Value> {
             Codec::Av1(av1) => Some(Value::U32(av1.tune)),
             _ => None,
         },
-        "hw_loop_filter_level" => match &profile.codec {
-            Codec::Vp9(vp9) if profile.use_hardware_encoding => {
-                Some(Value::U32(vp9.hw_loop_filter_level))
-            }
-            _ => Some(Value::U32(profile.hw_loop_filter_level)),
-        },
-        "hw_loop_filter_sharpness" => match &profile.codec {
-            Codec::Vp9(vp9) if profile.use_hardware_encoding => {
-                Some(Value::U32(vp9.hw_loop_filter_sharpness))
-            }
-            _ => Some(Value::U32(profile.hw_loop_filter_sharpness)),
-        },
+        "hw_loop_filter_level" => profile
+            .codec
+            .as_vp9()
+            .map(|v| Value::U32(v.hw_loop_filter_level)),
+        "hw_loop_filter_sharpness" => profile
+            .codec
+            .as_vp9()
+            .map(|v| Value::U32(v.hw_loop_filter_sharpness)),
         "qsv_look_ahead" => match &profile.codec {
             Codec::Vp9(vp9) => Some(Value::Bool(vp9.qsv_look_ahead)),
             _ => None,
@@ -410,7 +437,62 @@ fn apply_profile_field(profile: &mut Profile, field_name: &str, value: &Value) {
     use crate::engine::core::Codec;
 
     match (field_name, value) {
-        ("crf", Value::U32(v)) => profile.crf = *v,
+        ("crf", Value::U32(v)) => {
+            profile.crf = *v;
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.x265_crf = *v;
+            }
+        }
+        ("x265_preset", Value::String(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.x265_preset = v.clone();
+            }
+        }
+        ("x265_tune", Value::String(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.x265_tune = v.clone();
+            }
+        }
+        ("qsv_quality", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.qsv_quality = *v;
+            }
+        }
+        ("hevc_hw_preset", Value::String(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.hw_preset = v.clone();
+            }
+        }
+        ("hevc_nvenc_quality", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.nvenc_quality = *v;
+            }
+        }
+        ("hevc_hw_lookahead", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.hw_lookahead = *v;
+            }
+        }
+        ("hevc_hw_b_frames", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.hw_b_frames = *v;
+            }
+        }
+        ("hevc_hw_rc_mode", Value::String(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.hw_rc_mode = v.clone();
+            }
+        }
+        ("amf_qp", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.amf_qp = *v;
+            }
+        }
+        ("videotoolbox_q", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.videotoolbox_q = *v;
+            }
+        }
         ("cpu_used", Value::U32(v)) => {
             profile.cpu_used = *v;
             // Also update codec config
@@ -468,19 +550,27 @@ fn apply_profile_field(profile: &mut Profile, field_name: &str, value: &Value) {
                 vp9.aq_mode = *v;
             }
         }
-        ("hw_global_quality", Value::U32(v)) => {
-            profile.hw_global_quality = *v;
-            // Update codec-specific quality field (source of truth)
-            match &mut profile.codec {
-                Codec::Vp9(vp9) if profile.use_hardware_encoding => vp9.hw_global_quality = *v,
-                Codec::Av1(av1) if profile.use_hardware_encoding => av1.hw_cq = *v,
-                _ => {}
+        ("hw_global_quality", Value::U32(v)) => match &mut profile.codec {
+            Codec::Vp9(vp9) => vp9.hw_global_quality = *v,
+            Codec::Av1(av1) if profile.use_hardware_encoding => av1.hw_cq = *v,
+            Codec::Av1(_) | Codec::Hevc(_) => {}
+        },
+        ("hw_rc_mode", Value::U32(v)) => {
+            if let Codec::Vp9(vp9) = &mut profile.codec {
+                vp9.hw_rc_mode = *v;
             }
         }
-        ("hw_rc_mode", Value::U32(v)) => profile.hw_rc_mode = *v,
-        ("hw_b_frames", Value::U32(v)) => profile.hw_b_frames = *v,
+        ("hw_b_frames", Value::U32(v)) => match &mut profile.codec {
+            Codec::Vp9(vp9) => vp9.hw_b_frames = *v,
+            Codec::Hevc(hevc) => hevc.hw_b_frames = *v,
+            Codec::Av1(_) => {}
+        },
+        ("vaapi_quality", Value::U32(v)) => {
+            if let Codec::Hevc(hevc) = &mut profile.codec {
+                hevc.vaapi_quality = *v;
+            }
+        }
         ("hw_compression_level", Value::U32(v)) => {
-            profile.hw_compression_level = *v;
             if let Codec::Vp9(vp9) = &mut profile.codec {
                 vp9.hw_compression_level = *v;
             }
@@ -488,10 +578,12 @@ fn apply_profile_field(profile: &mut Profile, field_name: &str, value: &Value) {
         ("hw_denoise", Value::U32(v)) => match &mut profile.codec {
             Codec::Vp9(vp9) => vp9.hw_denoise = *v,
             Codec::Av1(av1) => av1.hw_denoise = *v,
+            Codec::Hevc(_) => {}
         },
         ("hw_detail", Value::U32(v)) => match &mut profile.codec {
             Codec::Vp9(vp9) => vp9.hw_detail = *v,
             Codec::Av1(av1) => av1.hw_detail = *v,
+            Codec::Hevc(_) => {}
         },
         ("arnr_max_frames", Value::U32(v)) => {
             profile.arnr_max_frames = *v;
@@ -522,13 +614,11 @@ fn apply_profile_field(profile: &mut Profile, field_name: &str, value: &Value) {
             }
         }
         ("hw_loop_filter_level", Value::U32(v)) => {
-            profile.hw_loop_filter_level = *v;
             if let Codec::Vp9(vp9) = &mut profile.codec {
                 vp9.hw_loop_filter_level = *v;
             }
         }
         ("hw_loop_filter_sharpness", Value::U32(v)) => {
-            profile.hw_loop_filter_sharpness = *v;
             if let Codec::Vp9(vp9) = &mut profile.codec {
                 vp9.hw_loop_filter_sharpness = *v;
             }

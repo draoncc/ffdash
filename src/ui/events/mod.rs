@@ -136,6 +136,11 @@ pub fn run_ui_with_options(
     // Load default profile on startup (using config preferences)
     config::initialize_default_profile(&mut app_state, config);
 
+    // Probe which Encoders work here (cached for the session); the config panel's
+    // hardware control follows this, on every OS.
+    app_state.config.encoder_availability =
+        crate::engine::hardware::detect_encoder_availability().clone();
+
     // Run hardware encoding preflight check if enabled in config
     if config.defaults.use_hardware_encoding {
         let result = crate::engine::hardware::run_preflight();
@@ -143,7 +148,6 @@ pub fn run_ui_with_options(
         app_state.config.hw_availability_message = result.error_message.clone();
 
         if result.available {
-            app_state.config.gpu_vendor = result.gpu_vendor;
             app_state.dashboard.gpu_model = result.gpu_model;
             app_state.dashboard.gpu_vendor = result.gpu_vendor;
             app_state.dashboard.gpu_available =
@@ -210,6 +214,14 @@ fn build_scan_config(state: &AppState, root: &std::path::Path) -> ScanConfig {
         .copied()
         .unwrap_or("webm")
         .to_string();
+    // WebM cannot carry HEVC (the dropdown snaps away from it, this guards other paths).
+    let custom_container = if state.config.codec_selection == crate::ui::state::CodecSelection::Hevc
+        && custom_container == "webm"
+    {
+        "mkv".to_string()
+    } else {
+        custom_container
+    };
 
     let profile = state
         .config

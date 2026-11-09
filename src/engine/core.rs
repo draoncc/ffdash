@@ -1,8 +1,10 @@
 mod av1_config;
+mod builtin_hevc_profiles;
 mod builtin_profiles;
+mod encode_plan;
 mod ffmpeg_cmd;
 mod ffmpeg_info;
-mod hw_config;
+mod hevc_config;
 mod log;
 mod profile;
 mod scan;
@@ -11,10 +13,12 @@ mod types;
 mod vp9_config;
 
 pub use av1_config::{Av1Config, Codec};
+pub use encode_plan::{
+    EncodePlan, HostPlatform, bit_depth_needed, is_ten_bit_pix_fmt, required_bit_depth,
+};
+pub(crate) use ffmpeg_cmd::build_encode_cmds_synced;
 pub use ffmpeg_cmd::{
-    build_av1_nvenc_cmd, build_av1_qsv_cmd, build_av1_software_cmd, build_av1_vaapi_cmd,
-    build_ffmpeg_cmd, build_ffmpeg_cmd_with_profile, build_ffmpeg_cmds_with_profile,
-    build_software_cmd, build_vaapi_cmd, encode_job, encode_job_with_callback,
+    build_encode_cmds, build_ffmpeg_cmds, encode_job, encode_job_with_callback,
     encode_job_with_callback_and_profile, format_ffmpeg_cmd, two_pass_log_prefix,
     validate_vaapi_config,
 };
@@ -22,7 +26,7 @@ pub use ffmpeg_info::{
     InputInfo, ffmpeg_version, ffprobe_version, parse_ffprobe_duration, parse_ffprobe_input_info,
     paths_are_same_file, probe_duration, probe_input_info, vmaf_filter_available,
 };
-pub use hw_config::HwEncodingConfig;
+pub use hevc_config::HevcConfig;
 pub use log::write_debug_log;
 pub use profile::{Profile, derive_output_path};
 pub use scan::{build_job_from_path, build_job_queue, is_video_file, scan, scan_streaming};
@@ -462,10 +466,8 @@ mod tests {
 
     #[test]
     fn test_vaapi_command_no_invalid_filter() {
-        use super::{HwEncodingConfig, Profile};
+        use super::Profile;
         use std::path::PathBuf;
-
-        let hw_config = HwEncodingConfig::default();
 
         let mut profile = Profile::get("vp9-good");
         profile.audio_primary_codec = "libopus".to_string();
@@ -499,9 +501,16 @@ mod tests {
             vmaf_partial_scores: Vec::new(),
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
+            encoder: None,
         };
 
-        let cmd = build_vaapi_cmd(&job, &profile, &hw_config);
+        let cmd = build_encode_cmds_synced(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::Vp9Vaapi)
+                .with_host(HostPlatform::Linux),
+        )
+        .remove(0);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -531,7 +540,7 @@ mod tests {
         );
 
         // Test 4: Should force CQP mode (rc_mode = 1) for reliability
-        // hw_config.global_quality = 70 (default) passed directly to FFmpeg in CQP mode
+        // settings.global_quality = 70 (default) passed directly to FFmpeg in CQP mode
         assert!(
             full_cmd.contains("-rc_mode:v 1"),
             "VAAPI command should force CQP (rc_mode 1) as default mode"
@@ -554,10 +563,8 @@ mod tests {
 
     #[test]
     fn test_vaapi_command_no_invalid_vbr_flag() {
-        use super::{HwEncodingConfig, Profile};
+        use super::Profile;
         use std::path::PathBuf;
-
-        let hw_config = HwEncodingConfig::default();
 
         let mut profile = Profile::get("vp9-good");
         profile.crf = 31;
@@ -590,9 +597,16 @@ mod tests {
             vmaf_partial_scores: Vec::new(),
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
+            encoder: None,
         };
 
-        let cmd = build_vaapi_cmd(&job, &profile, &hw_config);
+        let cmd = build_encode_cmds_synced(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::Vp9Vaapi)
+                .with_host(HostPlatform::Linux),
+        )
+        .remove(0);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -628,11 +642,8 @@ mod tests {
 
     #[test]
     fn test_vaapi_command_vbr_mode() {
-        use super::{HwEncodingConfig, Profile};
+        use super::Profile;
         use std::path::PathBuf;
-
-        let mut hw_config = HwEncodingConfig::default();
-        hw_config.rc_mode = 3; // Explicitly set VBR mode
 
         let mut profile = Profile::get("vp9-good");
         profile.audio_primary_codec = "libopus".to_string();
@@ -668,9 +679,16 @@ mod tests {
             vmaf_partial_scores: Vec::new(),
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
+            encoder: None,
         };
 
-        let cmd = build_vaapi_cmd(&job, &profile, &hw_config);
+        let cmd = build_encode_cmds_synced(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::Vp9Vaapi)
+                .with_host(HostPlatform::Linux),
+        )
+        .remove(0);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -747,9 +765,15 @@ mod tests {
             vmaf_partial_scores: Vec::new(),
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
+            encoder: None,
         };
 
-        let cmd = super::ffmpeg_cmd::build_av1_vaapi_cmd(&job, &profile);
+        let cmd = build_encode_cmds(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::Av1Vaapi),
+        )
+        .remove(0);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -835,9 +859,15 @@ mod tests {
             vmaf_partial_scores: Vec::new(),
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
+            encoder: None,
         };
 
-        let cmd = super::ffmpeg_cmd::build_av1_vaapi_cmd(&job, &profile);
+        let cmd = build_encode_cmds(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::Av1Vaapi),
+        )
+        .remove(0);
         let args: Vec<String> = cmd
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
@@ -874,7 +904,11 @@ mod tests {
             "vp9-good".to_string(),
         );
 
-        let cmds = build_ffmpeg_cmds_with_profile(&job, None, Some(&profile));
+        let cmds = build_encode_cmds(
+            &job,
+            &profile,
+            &EncodePlan::new(crate::engine::hardware::VideoEncoder::LibvpxVp9),
+        );
         assert_eq!(cmds.len(), 2, "Expected pass 1 + pass 2 commands");
 
         let to_string = |cmd: &std::process::Command| {

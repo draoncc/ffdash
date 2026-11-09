@@ -1,20 +1,12 @@
 use super::*;
-use crate::ui::applicability::{Backend, applies};
+use crate::engine::hardware::{Backend, VideoEncoder};
+use crate::ui::applicability::applies;
 use crate::ui::constants;
 use crate::ui::state::CodecSelection;
 
-/// The encoder backend currently selected in the UI.
-fn current_backend(state: &ConfigState) -> Backend {
-    if state.use_hardware_encoding {
-        Backend::Hardware(state.gpu_vendor)
-    } else {
-        Backend::Software
-    }
-}
-
-/// Whether `field` has any effect for the selected codec and backend.
+/// Whether `field` has any effect for the selected Encoder.
 fn is_active(state: &ConfigState, field: ConfigFocus) -> bool {
-    applies(field, state.codec_selection, current_backend(state))
+    applies(field, state.selected_encoder())
 }
 
 /// Draw a control that doesn't apply: dimmed and read-only. The caller must
@@ -635,20 +627,22 @@ impl ConfigScreen {
         let mut y = inner.y;
 
         // Hardware Encoding toggle (first item - top of Core Video section)
-        let hw_label = if cfg!(target_os = "linux") {
-            use crate::engine::hardware::GpuVendor;
-            match state.gpu_vendor {
-                GpuVendor::Nvidia => "Use Hardware Encoding (NVIDIA NVENC)",
-                GpuVendor::Intel => "Use Hardware Encoding (Intel Quick Sync)",
-                GpuVendor::Amd => "Use Hardware Encoding (AMD AMF)",
-                _ => "Use Hardware Encoding",
+        let hw_available = state.hardware_control_available();
+        let hw_label = if hw_available {
+            // Named after the Encoder hardware encoding would select, not the GPU vendor.
+            match state.hardware_encoder().backend() {
+                Backend::Nvenc => "Use Hardware Encoding (NVIDIA NVENC)",
+                Backend::Qsv => "Use Hardware Encoding (Intel Quick Sync)",
+                Backend::Amf => "Use Hardware Encoding (AMD AMF)",
+                Backend::Vaapi => "Use Hardware Encoding (VAAPI)",
+                Backend::Videotoolbox => "Use Hardware Encoding (Apple VideoToolbox)",
+                Backend::Software => "Use Hardware Encoding",
             }
         } else {
-            "Use Hardware Encoding (Linux only)"
+            "Use Hardware Encoding (no hardware encoder for this codec)"
         };
 
-        let hw_enabled = cfg!(target_os = "linux") && state.use_hardware_encoding;
-        let hw_available = cfg!(target_os = "linux");
+        let hw_enabled = hw_available && state.use_hardware_encoding;
 
         let hw_area = Rect {
             x: inner.x,
@@ -658,7 +652,7 @@ impl ConfigScreen {
         };
         state.hw_encoding_checkbox_area = Some(hw_area);
 
-        // Render checkbox - greyed out on non-Linux
+        // Render checkbox - greyed out when the Codec has no available Hardware Encoder
         let checkbox_char = if hw_enabled { '✓' } else { ' ' };
         let checkbox_style = if !hw_available {
             Style::default().fg(Color::DarkGray)
@@ -733,6 +727,21 @@ impl ConfigScreen {
         // Codec-specific settings
         use crate::ui::state::CodecSelection;
 
+        state.hevc_x265_preset_area = None;
+        state.hevc_x265_tune_area = None;
+        state.hevc_nvenc_preset_area = None;
+        state.hevc_nvenc_cq_area = None;
+        state.hevc_nvenc_lookahead_area = None;
+        state.hevc_nvenc_b_frames_area = None;
+        state.hevc_qsv_quality_area = None;
+        state.hevc_qsv_preset_area = None;
+        state.hevc_qsv_lookahead_area = None;
+        state.hevc_qsv_b_frames_area = None;
+        state.hevc_amf_qp_area = None;
+        state.hevc_amf_preset_area = None;
+        state.hevc_videotoolbox_q_area = None;
+        state.hevc_vaapi_quality_slider_area = None;
+        state.hevc_vaapi_b_frames_area = None;
         match state.codec_selection {
             CodecSelection::Vp9 => {
                 // VP9-specific: Profile and Pix Fmt on one line
@@ -929,20 +938,10 @@ impl ConfigScreen {
                     };
                     state.av1_hw_cq_slider_area = Some(cq_area);
 
-                    // Use per-encoder quality field based on GPU vendor
+                    // Use the selected Encoder's own quality field
                     // NVENC uses 0-63, QSV/VAAPI use 1-255
-                    let (min_cq, max_cq, cq_value) = match state.gpu_vendor {
-                        crate::engine::hardware::GpuVendor::Nvidia => {
-                            (0, 63, state.av1_nvenc_cq.clamp(0, 63))
-                        }
-                        crate::engine::hardware::GpuVendor::Intel => {
-                            (1, 255, state.av1_qsv_cq.clamp(1, 255))
-                        }
-                        _ => {
-                            // AMD and other GPUs use VAAPI
-                            (1, 255, state.av1_vaapi_cq.clamp(1, 255))
-                        }
-                    };
+                    let (min_cq, max_cq, cq_value) = state.av1_hw_cq();
+                    let cq_value = cq_value.clamp(min_cq, max_cq);
 
                     let cq_slider =
                         Slider::new("CQ (Lower=Better Quality, Higher=Smaller)", min_cq, max_cq)
@@ -1174,12 +1173,362 @@ impl ConfigScreen {
                     state.av1_hw_tile_rows_area = None;
                 }
             }
+            CodecSelection::Hevc => {
+                // HEVC-specific settings. Clear the other codecs' areas to prevent ghost
+                // interactions.
+                state.vp9_profile_list_area = None;
+                state.av1_preset_slider_area = None;
+                state.av1_tune_area = None;
+                state.av1_film_grain_slider_area = None;
+                state.av1_film_grain_denoise_checkbox_area = None;
+                state.av1_enable_overlays_checkbox_area = None;
+                state.av1_scd_checkbox_area = None;
+                state.av1_scm_area = None;
+                state.av1_enable_tf_checkbox_area = None;
+                state.av1_hw_preset_area = None;
+                state.av1_hw_cq_slider_area = None;
+                state.av1_hw_lookahead_area = None;
+                state.av1_hw_tile_cols_area = None;
+                state.av1_hw_tile_rows_area = None;
+
+                // Bit depth (8-bit vs 10-bit Main10): shared by software and hardware
+                let pix_fmt_area = Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
+                };
+                state.pix_fmt_area = Some(pix_fmt_area);
+                let selected_index = state.pix_fmt_state.selected().unwrap_or(0);
+                let selected_value = PIX_FMTS.get(selected_index).unwrap_or(&"yuv420p");
+                let pix_style = if state.focus == ConfigFocus::PixFmtDropdown {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::raw("Bit Depth: "),
+                        Span::styled(*selected_value, pix_style),
+                        Span::raw(" ▼"),
+                    ])),
+                    pix_fmt_area,
+                );
+                y += 1;
+
+                state.vaapi_compression_level_slider_area = None;
+                state.qsv_quality_slider_area = None;
+                state.cpu_used_slider_area = None;
+                state.cpu_used_pass1_slider_area = None;
+                state.cpu_used_pass2_slider_area = None;
+
+                // Extension point: each HEVC hardware Encoder renders its own settings
+                // block here (libx265's CRF is the shared CRF slider).
+                let hevc_encoder = state.selected_encoder();
+                if hevc_encoder == VideoEncoder::Libx265 {
+                    let preset_tune_chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(Rect {
+                            x: inner.x,
+                            y,
+                            width: inner.width,
+                            height: 1,
+                        });
+
+                    state.hevc_x265_preset_area = Some(preset_tune_chunks[0]);
+                    let preset_idx = state.x265_preset_state.selected().unwrap_or(0);
+                    let preset_value = constants::X265_PRESETS.get(preset_idx).unwrap_or(&"medium");
+                    let preset_style = if state.focus == ConfigFocus::HevcX265PresetDropdown {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    };
+                    frame.render_widget(
+                        Paragraph::new(Line::from(vec![
+                            Span::raw("Preset: "),
+                            Span::styled(*preset_value, preset_style),
+                            Span::raw(" ▼"),
+                        ])),
+                        preset_tune_chunks[0],
+                    );
+
+                    state.hevc_x265_tune_area = Some(preset_tune_chunks[1]);
+                    let tune_idx = state.x265_tune_state.selected().unwrap_or(0);
+                    let tune_value = constants::X265_TUNES.get(tune_idx).unwrap_or(&"none");
+                    let tune_style = if state.focus == ConfigFocus::HevcX265TuneDropdown {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    };
+                    frame.render_widget(
+                        Paragraph::new(Line::from(vec![
+                            Span::raw("Tune: "),
+                            Span::styled(*tune_value, tune_style),
+                            Span::raw(" ▼"),
+                        ])),
+                        preset_tune_chunks[1],
+                    );
+                    y += 1;
+                } else if hevc_encoder == VideoEncoder::HevcNvenc {
+                    // hevc_nvenc: preset (shared 1-7 scale), CQ, lookahead and B-frames
+                    let preset_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_nvenc_preset_area = Some(preset_area);
+                    let preset: u32 = state.hevc.hw_preset.parse().unwrap_or(4).clamp(1, 7);
+                    frame.render_widget(
+                        Slider::new("NVENC Preset (1=Best Quality, 7=Fastest)", 1, 7)
+                            .value(preset)
+                            .focused(state.focus == ConfigFocus::HevcNvencPresetSlider),
+                        preset_area,
+                    );
+                    y += 2;
+
+                    let cq_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_nvenc_cq_area = Some(cq_area);
+                    frame.render_widget(
+                        Slider::new("NVENC CQ (Lower=Better Quality, Higher=Smaller)", 0, 51)
+                            .value(state.hevc.nvenc_quality.min(51))
+                            .focused(state.focus == ConfigFocus::HevcNvencCqSlider),
+                        cq_area,
+                    );
+                    y += 2;
+
+                    let la_bf_chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(Rect {
+                            x: inner.x,
+                            y,
+                            width: inner.width,
+                            height: 1,
+                        });
+                    for (idx, (label, value, focus_variant)) in [
+                        (
+                            "Lookahead (0-32): ",
+                            state.hevc.hw_lookahead,
+                            ConfigFocus::HevcNvencLookaheadInput,
+                        ),
+                        (
+                            "B-Frames (0-4): ",
+                            state.hevc.hw_b_frames,
+                            ConfigFocus::HevcNvencBFramesInput,
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let area = la_bf_chunks[idx];
+                        if idx == 0 {
+                            state.hevc_nvenc_lookahead_area = Some(area);
+                        } else {
+                            state.hevc_nvenc_b_frames_area = Some(area);
+                        }
+                        let focused = state.focus == focus_variant;
+                        let text = Self::adjustable_value_display(value.to_string(), focused);
+                        let style = if focused {
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        };
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw(label),
+                                Span::styled(text, style),
+                            ])),
+                            area,
+                        );
+                    }
+                    y += 1;
+                } else if hevc_encoder == VideoEncoder::HevcAmf {
+                    // hevc_amf: constant QP (0-51, lower is better) and the shared preset
+                    let qp_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_amf_qp_area = Some(qp_area);
+                    frame.render_widget(
+                        Slider::new("QP (Lower=Better Quality, Higher=Smaller)", 0, 51)
+                            .value(state.hevc.amf_qp.min(51))
+                            .focused(state.focus == ConfigFocus::HevcAmfQpSlider),
+                        qp_area,
+                    );
+                    y += 3;
+
+                    let preset_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_amf_preset_area = Some(preset_area);
+                    frame.render_widget(
+                        Slider::new("HW Preset (1=Best Quality, 7=Fastest)", 1, 7)
+                            .value(state.hevc.hw_preset.parse::<u32>().unwrap_or(4).clamp(1, 7))
+                            .focused(state.focus == ConfigFocus::HevcAmfPresetSlider),
+                        preset_area,
+                    );
+                    y += 3;
+                } else if hevc_encoder == VideoEncoder::HevcVideotoolbox {
+                    // hevc_videotoolbox: `q:v` 1-100, HIGHER is better
+                    let q_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_videotoolbox_q_area = Some(q_area);
+                    frame.render_widget(
+                        Slider::new("Quality (Higher=Better Quality, Lower=Smaller)", 1, 100)
+                            .value(state.hevc.videotoolbox_q.clamp(1, 100))
+                            .focused(state.focus == ConfigFocus::HevcVideotoolboxQSlider),
+                        q_area,
+                    );
+                    y += 3;
+                } else if hevc_encoder == VideoEncoder::HevcVaapi {
+                    // hevc_vaapi: constant QP 1-51 and B-frames (no preset or lookahead)
+                    let qp_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 2,
+                    };
+                    state.hevc_vaapi_quality_slider_area = Some(qp_area);
+                    let qp_slider = Slider::new("QP (1-51, Lower=Better Quality)", 1, 51)
+                        .value(state.hevc.vaapi_quality.clamp(1, 51))
+                        .focused(state.focus == ConfigFocus::HevcVaapiQualitySlider);
+                    frame.render_widget(qp_slider, qp_area);
+                    y += 3;
+
+                    let bf_area = Rect {
+                        x: inner.x,
+                        y,
+                        width: inner.width,
+                        height: 1,
+                    };
+                    state.hevc_vaapi_b_frames_area = Some(bf_area);
+                    let bf_focus = state.focus == ConfigFocus::HevcVaapiBFramesInput;
+                    let bf_text = Self::adjustable_value_display(
+                        state.hevc.hw_b_frames.to_string(),
+                        bf_focus,
+                    );
+                    let bf_style = if bf_focus {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    };
+                    frame.render_widget(
+                        Paragraph::new(Line::from(vec![
+                            Span::raw("B-Frames (0-4): "),
+                            Span::styled(bf_text, bf_style),
+                        ])),
+                        bf_area,
+                    );
+                    y += 1;
+                }
+
+                // hevc_qsv: quality, preset, lookahead and b-frames, two per row.
+                if is_active(state, ConfigFocus::HevcQsvQualityInput) {
+                    let rows = [
+                        [
+                            (
+                                ConfigFocus::HevcQsvQualityInput,
+                                "Quality (QP)",
+                                state.hevc.qsv_quality.to_string(),
+                            ),
+                            (
+                                ConfigFocus::HevcQsvPresetInput,
+                                "Preset (1-7)",
+                                state.hevc.hw_preset.clone(),
+                            ),
+                        ],
+                        [
+                            (
+                                ConfigFocus::HevcQsvLookaheadInput,
+                                "Look-ahead",
+                                state.hevc.hw_lookahead.to_string(),
+                            ),
+                            (
+                                ConfigFocus::HevcQsvBFramesInput,
+                                "B-frames",
+                                state.hevc.hw_b_frames.to_string(),
+                            ),
+                        ],
+                    ];
+                    for row in rows {
+                        let chunks = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                            .split(Rect {
+                                x: inner.x,
+                                y,
+                                width: inner.width,
+                                height: 1,
+                            });
+                        for (i, (field, label, value)) in row.into_iter().enumerate() {
+                            let focused = state.focus == field;
+                            match field {
+                                ConfigFocus::HevcQsvQualityInput => {
+                                    state.hevc_qsv_quality_area = Some(chunks[i])
+                                }
+                                ConfigFocus::HevcQsvPresetInput => {
+                                    state.hevc_qsv_preset_area = Some(chunks[i])
+                                }
+                                ConfigFocus::HevcQsvLookaheadInput => {
+                                    state.hevc_qsv_lookahead_area = Some(chunks[i])
+                                }
+                                _ => state.hevc_qsv_b_frames_area = Some(chunks[i]),
+                            }
+                            let style = if focused {
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::Green)
+                            };
+                            frame.render_widget(
+                                Paragraph::new(Line::from(vec![
+                                    Span::raw(format!("{label}: ")),
+                                    Span::styled(
+                                        Self::adjustable_value_display(value, focused),
+                                        style,
+                                    ),
+                                ])),
+                                chunks[i],
+                            );
+                        }
+                        y += 1;
+                    }
+                }
+            }
         }
 
         // The other codec's settings collapse into one dimmed line
         let other_codec_line = match state.codec_selection {
             CodecSelection::Vp9 => "AV1 options (select AV1 to edit)",
             CodecSelection::Av1 => "VP9 options (select VP9 to edit)",
+            CodecSelection::Hevc => "VP9 and AV1 options (select one to edit)",
         };
         frame.render_widget(
             Paragraph::new(other_codec_line).style(Style::default().fg(Color::DarkGray)),
@@ -2957,9 +3306,7 @@ impl ConfigScreen {
 
         // Hardware Encoding Filter Parameters (Intel/AMD only, not NVIDIA)
         // VPP denoise/detail filters for QSV and VAAPI
-        if state.use_hardware_encoding
-            && !matches!(state.gpu_vendor, crate::engine::hardware::GpuVendor::Nvidia)
-        {
+        if is_active(state, ConfigFocus::HwDenoiseInput) {
             y += 1; // Spacer before hardware filter section
 
             let vpp_chunks = Layout::default()
@@ -2985,12 +3332,11 @@ impl ConfigScreen {
             } else {
                 Style::default().fg(Color::Green)
             };
-            let denoise_label =
-                if matches!(state.gpu_vendor, crate::engine::hardware::GpuVendor::Intel) {
-                    "HW Denoise (0-100): "
-                } else {
-                    "HW Denoise (0-64): "
-                };
+            let denoise_label = if state.selected_encoder().backend() == Backend::Qsv {
+                "HW Denoise (0-100): "
+            } else {
+                "HW Denoise (0-64): "
+            };
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw(denoise_label),
@@ -3012,12 +3358,11 @@ impl ConfigScreen {
             } else {
                 Style::default().fg(Color::Green)
             };
-            let detail_label =
-                if matches!(state.gpu_vendor, crate::engine::hardware::GpuVendor::Intel) {
-                    "HW Detail (0-100): "
-                } else {
-                    "HW Detail (0-64): "
-                };
+            let detail_label = if state.selected_encoder().backend() == Backend::Qsv {
+                "HW Detail (0-100): "
+            } else {
+                "HW Detail (0-64): "
+            };
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw(detail_label),
@@ -3032,10 +3377,7 @@ impl ConfigScreen {
         }
 
         // VP9 QSV-specific Parameters (Intel only) - EXCLUDING the preset slider which is in Core Video
-        if state.use_hardware_encoding
-            && matches!(state.codec_selection, CodecSelection::Vp9)
-            && matches!(state.gpu_vendor, crate::engine::hardware::GpuVendor::Intel)
-        {
+        if is_active(state, ConfigFocus::Vp9QsvLookaheadCheckbox) {
             y += 1; // Spacer
 
             // QSV preset slider is in Core Video panel, not here
@@ -3371,6 +3713,32 @@ impl ConfigScreen {
                     constants::AV1_TUNES,
                     area,
                     &mut state.av1_tune_state,
+                );
+            }
+            ConfigFocus::HevcX265PresetDropdown => {
+                let area = state.hevc_x265_preset_area.unwrap_or_default();
+                let selected = state.x265_preset_state.selected().unwrap_or(0);
+                if selected >= constants::X265_PRESETS.len() {
+                    state.x265_preset_state.select(Some(0));
+                }
+                Self::render_popup_list(
+                    frame,
+                    constants::X265_PRESETS,
+                    area,
+                    &mut state.x265_preset_state,
+                );
+            }
+            ConfigFocus::HevcX265TuneDropdown => {
+                let area = state.hevc_x265_tune_area.unwrap_or_default();
+                let selected = state.x265_tune_state.selected().unwrap_or(0);
+                if selected >= constants::X265_TUNES.len() {
+                    state.x265_tune_state.select(Some(0));
+                }
+                Self::render_popup_list(
+                    frame,
+                    constants::X265_TUNES,
+                    area,
+                    &mut state.x265_tune_state,
                 );
             }
             ConfigFocus::Av1ScmDropdown => {

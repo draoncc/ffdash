@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use crate::engine::core::{Codec, HwEncodingConfig, Profile, ProgressParser, write_debug_log};
+use crate::engine::core::{
+    Codec, EncodePlan, Profile, ProgressParser, build_encode_cmds_synced, write_debug_log,
+};
+use crate::engine::hardware::VideoEncoder;
 use crate::engine::{JobStatus, VideoJob, probe_duration};
 
 /// Quality floor for software encoding (CRF)
@@ -126,7 +129,7 @@ pub fn build_vmaf_cmd(
     output_height: u32,
     n_subsample: u32,
     log_path: &Path,
-    hw_config: Option<&HwEncodingConfig>,
+    plan: &EncodePlan,
     use_hw_decode: bool,
 ) -> Command {
     let model = select_vmaf_model(output_height);
@@ -167,8 +170,8 @@ pub fn build_vmaf_cmd(
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-y"]);
 
-    // Try hardware decode if requested and hw_config is available
-    if use_hw_decode && hw_config.is_some() {
+    // Try hardware decode if requested and the plan uses hardware
+    if use_hw_decode && plan.uses_hardware() {
         // Detect VAAPI configuration
         if let Some(config) = crate::engine::hardware::detect_vaapi_config() {
             // Set environment variables for driver
@@ -240,14 +243,14 @@ pub fn run_vmaf_evaluation(
     output_height: u32,
     n_subsample: u32,
     temp_dir: &Path,
-    hw_config: Option<&HwEncodingConfig>,
+    plan: &EncodePlan,
 ) -> Result<f32> {
     // Generate unique log filename
     let log_filename = format!("vmaf_{}.json", uuid::Uuid::new_v4());
     let log_path = temp_dir.join(log_filename);
 
     // Try hardware decode first if available, then fallback to software
-    let use_hw_first = hw_config.is_some();
+    let use_hw_first = plan.uses_hardware();
 
     for attempt in 0..2 {
         let use_hw_decode = use_hw_first && attempt == 0;
@@ -262,7 +265,7 @@ pub fn run_vmaf_evaluation(
             output_height,
             n_subsample,
             &log_path,
-            hw_config,
+            plan,
             use_hw_decode,
         );
 
@@ -490,7 +493,7 @@ pub fn cleanup_job_temp_dir(path: &Path) -> Result<()> {
 /// # Arguments
 /// * `job` - The video job
 /// * `profile` - Encoding profile
-/// * `hw_config` - Optional hardware config
+/// * `plan` - Encode Plan (selected Encoder)
 /// * `window_start` - Start time in seconds
 /// * `window_duration` - Duration in seconds
 /// * `quality` - CRF (software) or global_quality (hardware) override
@@ -501,7 +504,7 @@ pub fn cleanup_job_temp_dir(path: &Path) -> Result<()> {
 pub fn build_window_encode_cmd(
     job: &VideoJob,
     profile: &Profile,
-    hw_config: Option<&HwEncodingConfig>,
+    plan: &EncodePlan,
     window_start: f64,
     window_duration: f64,
     quality: u32,
@@ -515,38 +518,17 @@ pub fn build_window_encode_cmd(
     test_profile.scale_width = 0;
     test_profile.scale_height = 0;
 
-    match (hw_config.is_some(), &mut test_profile.codec) {
-        (true, Codec::Av1(av1)) => {
-            av1.hw_cq = quality;
-        }
-        (true, Codec::Vp9(_)) => {
-            test_profile.hw_global_quality = quality;
-        }
-        (false, _) => {
-            test_profile.crf = quality;
-        }
-    }
-
-    // Clone hw_config and override quality (hw_config.global_quality is what FFmpeg uses)
-    let test_hw_config = hw_config.map(|hw| {
-        let mut config = hw.clone();
-        config.global_quality = quality;
-        config
-    });
-
     // Create a temporary job for the window
     let mut window_job = job.clone();
     window_job.output_path = output_path.to_path_buf();
 
-    // Build the base command using codec-aware builders
-    // This will automatically select the correct encoder based on codec type:
-    // - VP9: vp9_vaapi (hw) or libvpx-vp9 (sw)
-    // - AV1: av1_vaapi (hw) or libsvtav1 (sw)
-    let cmd = crate::engine::build_ffmpeg_cmd_with_profile(
-        &window_job,
-        test_hw_config.as_ref(),
-        Some(&test_profile),
-    );
+    // The test quality is applied as the Encode Plan's Quality Override, which sets the
+    // active Encoder's own quality field.
+    let plan = plan.with_quality_override(quality);
+    let cmd = build_encode_cmds_synced(&window_job, &test_profile, &plan)
+        .into_iter()
+        .next()
+        .expect("build_encode_cmds returns at least one command");
 
     // Get environment variables (preserve VAAPI driver settings)
     let env_vars: Vec<_> = cmd
@@ -702,7 +684,7 @@ pub fn build_window_encode_cmd(
 /// # Arguments
 /// * `job` - The video job
 /// * `profile` - Encoding profile
-/// * `hw_config` - Optional hardware config
+/// * `plan` - Encode Plan (selected Encoder)
 /// * `window` - (start_time, duration) tuple
 /// * `quality` - Quality setting to use
 /// * `temp_dir` - Directory for output
@@ -712,7 +694,7 @@ pub fn build_window_encode_cmd(
 pub fn encode_window(
     job: &VideoJob,
     profile: &Profile,
-    hw_config: Option<&HwEncodingConfig>,
+    plan: &EncodePlan,
     window: (f64, f64),
     quality: u32,
     temp_dir: &Path,
@@ -729,15 +711,8 @@ pub fn encode_window(
     let output_path = temp_dir.join(output_filename);
 
     // Build and run encode command
-    let mut cmd = build_window_encode_cmd(
-        job,
-        profile,
-        hw_config,
-        start,
-        duration,
-        quality,
-        &output_path,
-    );
+    let mut cmd =
+        build_window_encode_cmd(job, profile, plan, start, duration, quality, &output_path);
 
     // Debug: log the actual command being executed
     let cmd_str = format!(
@@ -784,7 +759,13 @@ pub fn is_vmaf_compatible(profile: &Profile) -> bool {
     if profile.use_hardware_encoding {
         // Hardware: only CQP mode (mode 1)
         // Note: ICQ/VBR/CBR removed due to Intel Arc driver bugs
-        profile.hw_rc_mode == 1
+        match &profile.codec {
+            Codec::Vp9(vp9) => vp9.hw_rc_mode == 1,
+            // AV1 hardware Encoders are always CQP
+            Codec::Av1(_) => true,
+            // HEVC hardware Encoders are constant-quality only
+            Codec::Hevc(hevc) => hevc.hw_rc_mode == "cq",
+        }
     } else {
         // Software: CQ or CQCap mode (quality-driven, max_bitrate is optional ceiling)
         profile.video_target_bitrate == 0
@@ -797,35 +778,64 @@ pub fn is_vmaf_compatible(profile: &Profile) -> bool {
 ///
 /// # Arguments
 /// * `profile` - The encoding profile
+/// * `plan` - Encode Plan whose active Encoder owns the quality field
 ///
 /// # Returns
 /// The baseline quality value (CRF or global_quality)
-fn get_baseline_quality(profile: &Profile) -> u32 {
-    if profile.use_hardware_encoding {
-        match &profile.codec {
-            Codec::Av1(av1) => av1.hw_cq,
-            Codec::Vp9(_) => profile.hw_global_quality,
-        }
-    } else {
-        profile.crf
+fn get_baseline_quality(profile: &Profile, plan: &EncodePlan) -> u32 {
+    profile.active_quality(plan.encoder)
+}
+
+/// How Auto-VMAF searches an Encoder's own quality scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QualitySearch {
+    /// The best-quality bound the search never goes past (the floor when lower is better).
+    pub best: u32,
+    /// Whether a lower value means better quality (CRF/QP) rather than worse (`q:v`).
+    pub lower_is_better: bool,
+}
+
+/// The Auto-VMAF search range and direction for `encoder`.
+///
+/// Extension point: every HEVC hardware Encoder has its own arm; set `best` and
+/// `lower_is_better` from that Encoder's native quality scale.
+pub fn quality_search(encoder: VideoEncoder) -> QualitySearch {
+    use VideoEncoder::*;
+    let lower = |best| QualitySearch {
+        best,
+        lower_is_better: true,
+    };
+    match encoder {
+        // Software Encoders (libx265 CRF 0-51 stops at CRF 10 like the others).
+        LibvpxVp9 | LibsvtAv1 | LibaomAv1 | Libx265 => lower(SOFTWARE_QUALITY_FLOOR),
+        // Hardware Encoders whose quality scale is lower-is-better (QSV, VAAPI and NVENC
+        // CQ/QP, AMF QP): one shared floor.
+        Vp9Qsv | Vp9Vaapi | Av1Qsv | Av1Nvenc | Av1Vaapi | Av1Amf | HevcNvenc | HevcQsv
+        | HevcVaapi | HevcAmf => lower(HARDWARE_QUALITY_FLOOR),
+        // VideoToolbox q:v is 1-100 and HIGHER is better: set the ceiling here.
+        HevcVideotoolbox => QualitySearch {
+            best: 100,
+            lower_is_better: false,
+        },
     }
 }
 
-/// Get quality floor for the encoder type
-///
-/// Returns the minimum quality setting we'll try.
-/// Going lower than this produces diminishing returns.
-///
-/// # Arguments
-/// * `profile` - The encoding profile
-///
-/// # Returns
-/// The quality floor value
-fn get_quality_floor(profile: &Profile) -> u32 {
-    if profile.use_hardware_encoding {
-        HARDWARE_QUALITY_FLOOR
+/// The next quality to try after `quality` missed the target, one `step` toward
+/// better quality, clamped to the search bound.
+fn improve_quality(quality: u32, step: u32, search: QualitySearch) -> u32 {
+    if search.lower_is_better {
+        quality.saturating_sub(step).max(search.best)
     } else {
-        SOFTWARE_QUALITY_FLOOR
+        quality.saturating_add(step).min(search.best)
+    }
+}
+
+/// Whether `quality` is already at the best the search allows.
+fn at_best_quality(quality: u32, search: QualitySearch) -> bool {
+    if search.lower_is_better {
+        quality <= search.best
+    } else {
+        quality >= search.best
     }
 }
 
@@ -846,7 +856,7 @@ fn get_quality_floor(profile: &Profile) -> u32 {
 /// # Arguments
 /// * `job` - The video job to calibrate (mutable for real-time updates)
 /// * `profile` - Encoding profile with VMAF settings
-/// * `hw_config` - Optional hardware encoding config
+/// * `plan` - Encode Plan (selected Encoder)
 /// * `callback` - Progress callback for real-time UI updates
 ///
 /// # Returns
@@ -861,7 +871,7 @@ fn get_quality_floor(profile: &Profile) -> u32 {
 pub fn calibrate_quality<F>(
     job: &mut VideoJob,
     profile: &Profile,
-    hw_config: Option<&HwEncodingConfig>,
+    plan: &EncodePlan,
     callback: &mut F,
 ) -> Result<CalibrationResult>
 where
@@ -905,8 +915,9 @@ where
     let temp_dir = create_job_temp_dir(job)?;
 
     // Get calibration parameters
-    let mut quality = get_baseline_quality(profile);
-    let quality_floor = get_quality_floor(profile);
+    let mut quality = get_baseline_quality(profile, plan);
+    let search = quality_search(plan.encoder);
+    let quality_floor = search.best;
     let target_vmaf = profile.vmaf_target;
     let step = profile.vmaf_step as u32;
     let max_attempts = profile.vmaf_max_attempts;
@@ -967,10 +978,10 @@ where
             ));
 
             // Encode window
-            let encoded_path = encode_window(job, profile, hw_config, window, quality, &temp_dir)
+            let encoded_path = encode_window(job, profile, plan, window, quality, &temp_dir)
                 .with_context(|| {
-                format!("Failed to encode window {} at quality {}", idx + 1, quality)
-            })?;
+                    format!("Failed to encode window {} at quality {}", idx + 1, quality)
+                })?;
 
             // Evaluate VMAF
             let vmaf_score = run_vmaf_evaluation(
@@ -982,7 +993,7 @@ where
                 output_height,
                 profile.vmaf_n_subsample,
                 &temp_dir,
-                hw_config,
+                plan,
             )
             .with_context(|| format!("Failed to evaluate VMAF for window {}", idx + 1))?;
 
@@ -1040,7 +1051,7 @@ where
         }
 
         // Check if we hit quality floor
-        if quality <= quality_floor {
+        if at_best_quality(quality, search) {
             let _ = write_debug_log(&format!(
                 "[Auto-VAMF] WARNING: Quality floor ({}) reached without meeting target. Best VMAF: {:.2}",
                 quality_floor, avg_vmaf
@@ -1061,8 +1072,7 @@ where
         }
 
         // Increase quality for next iteration (lower CRF/global_quality = higher quality)
-        let new_quality = quality.saturating_sub(step);
-        quality = new_quality.max(quality_floor);
+        quality = improve_quality(quality, step, search);
 
         let _ = write_debug_log(&format!(
             "[Auto-VAMF] Increasing quality to {} for next attempt",
@@ -1215,48 +1225,96 @@ mod tests {
         profile.use_hardware_encoding = true;
 
         // CQP mode (rc_mode = 1) - compatible (only supported mode)
-        profile.hw_rc_mode = 1;
+        profile.codec.as_vp9_mut().unwrap().hw_rc_mode = 1;
         assert!(is_vmaf_compatible(&profile));
 
         // CBR mode (rc_mode = 2) - not compatible
-        profile.hw_rc_mode = 2;
+        profile.codec.as_vp9_mut().unwrap().hw_rc_mode = 2;
         assert!(!is_vmaf_compatible(&profile));
 
         // VBR mode (rc_mode = 3) - not compatible
-        profile.hw_rc_mode = 3;
+        profile.codec.as_vp9_mut().unwrap().hw_rc_mode = 3;
         assert!(!is_vmaf_compatible(&profile));
 
         // ICQ mode (rc_mode = 4) - not compatible (removed due to driver bugs)
-        profile.hw_rc_mode = 4;
+        profile.codec.as_vp9_mut().unwrap().hw_rc_mode = 4;
         assert!(!is_vmaf_compatible(&profile));
     }
 
     #[test]
     fn test_get_baseline_quality() {
+        use crate::engine::hardware::VideoEncoder;
         let mut profile = Profile::get("vp9-good");
-
-        // Software
-        profile.use_hardware_encoding = false;
         profile.crf = 30;
-        assert_eq!(get_baseline_quality(&profile), 30);
+        let sw = EncodePlan::new(VideoEncoder::LibvpxVp9);
+        assert_eq!(get_baseline_quality(&profile, &sw), 30);
 
-        // Hardware
-        profile.use_hardware_encoding = true;
-        profile.hw_global_quality = 70;
-        assert_eq!(get_baseline_quality(&profile), 70);
+        profile.codec.as_vp9_mut().unwrap().hw_global_quality = 70;
+        let hw = EncodePlan::new(VideoEncoder::Vp9Vaapi);
+        assert_eq!(get_baseline_quality(&profile, &hw), 70);
+
+        // AV1 hardware reads the active Encoder's own field, not legacy hw_cq
+        let mut av1 = Profile::get("av1-vaapi");
+        let cfg = av1.codec.as_av1_mut().unwrap();
+        cfg.vaapi_cq = 41;
+        cfg.hw_cq = 99;
+        let plan = EncodePlan::new(VideoEncoder::Av1Vaapi);
+        assert_eq!(get_baseline_quality(&av1, &plan), 41);
+    }
+
+    #[test]
+    fn hevc_search_ranges_and_directions() {
+        use crate::engine::hardware::VideoEncoder::*;
+        let x265 = quality_search(Libx265);
+        assert_eq!(x265.best, 10);
+        assert!(x265.lower_is_better);
+        assert_eq!(improve_quality(28, 2, x265), 26);
+        assert_eq!(improve_quality(11, 2, x265), 10);
+        assert!(at_best_quality(10, x265));
+        assert!(!at_best_quality(11, x265));
+
+        // hevc_qsv -q:v: lower is better, bounded by the hardware floor.
+        let qsv = quality_search(HevcQsv);
+        assert_eq!(qsv.best, HARDWARE_QUALITY_FLOOR);
+        assert!(qsv.lower_is_better);
+        assert_eq!(improve_quality(26, 2, qsv), 24);
+        // VAAPI QP 1-51: lower is better, stop at the hardware floor.
+        let vaapi = quality_search(HevcVaapi);
+        assert!(vaapi.lower_is_better);
+        assert_eq!(vaapi.best, HARDWARE_QUALITY_FLOOR);
+
+        // hevc_nvenc -cq 0-51: lower is better, stops at the shared hardware floor.
+        let nv = quality_search(HevcNvenc);
+        assert_eq!(nv.best, HARDWARE_QUALITY_FLOOR);
+        assert!(nv.lower_is_better);
+        assert_eq!(improve_quality(28, 2, nv), 26);
+        assert_eq!(improve_quality(6, 2, nv), HARDWARE_QUALITY_FLOOR);
+
+        // VideoToolbox q:v: higher is better, so the search climbs toward 100.
+        let vt = quality_search(HevcVideotoolbox);
+        assert!(!vt.lower_is_better);
+        assert_eq!(improve_quality(60, 2, vt), 62);
+        assert_eq!(improve_quality(99, 2, vt), 100);
+        assert!(at_best_quality(100, vt));
+
+        // AMF QP: lower is better, floor shared with the other hardware Encoders.
+        let amf = quality_search(HevcAmf);
+        assert!(amf.lower_is_better);
+        assert_eq!(amf.best, HARDWARE_QUALITY_FLOOR);
+        assert_eq!(improve_quality(26, 2, amf), 24);
     }
 
     #[test]
     fn test_get_quality_floor() {
-        let mut profile = Profile::get("vp9-good");
-
-        // Software floor
-        profile.use_hardware_encoding = false;
-        assert_eq!(get_quality_floor(&profile), SOFTWARE_QUALITY_FLOOR);
-
-        // Hardware floor
-        profile.use_hardware_encoding = true;
-        assert_eq!(get_quality_floor(&profile), HARDWARE_QUALITY_FLOOR);
+        use crate::engine::hardware::VideoEncoder;
+        assert_eq!(
+            quality_search(VideoEncoder::LibvpxVp9).best,
+            SOFTWARE_QUALITY_FLOOR
+        );
+        assert_eq!(
+            quality_search(VideoEncoder::Vp9Vaapi).best,
+            HARDWARE_QUALITY_FLOOR
+        );
     }
 
     // === Temp Directory Tests ===

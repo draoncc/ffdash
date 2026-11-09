@@ -118,10 +118,6 @@ fn handle_check_vaapi(test_encode: bool) {
     println!("2. Preflight Checks:");
     let preflight = hardware::run_preflight();
     println!(
-        "   Platform (Linux): {}",
-        if preflight.platform_ok { "OK" } else { "FAIL" }
-    );
-    println!(
         "   GPU detected: {}",
         if preflight.gpu_detected { "OK" } else { "FAIL" }
     );
@@ -434,8 +430,9 @@ fn handle_dry_run(directory: Option<std::path::PathBuf>, overwrite: bool) {
                 cfg.defaults.skip_vp9_av1,
             );
             for job in &jobs {
-                let cmd = engine::build_ffmpeg_cmd(job, None);
-                println!("{:?}", cmd);
+                for cmd in engine::build_ffmpeg_cmds(job) {
+                    println!("{:?}", cmd);
+                }
             }
         }
         Err(e) => {

@@ -42,6 +42,7 @@ fn set_resolution_selection(config: &mut crate::ui::state::ConfigState, idx: usi
 fn set_video_codec_selection(config: &mut crate::ui::state::ConfigState, idx: usize) {
     config.video_codec_state.select(Some(idx));
     config.codec_selection = options::codec_selection_from_idx(idx);
+    config.enforce_container_for_codec();
 }
 
 pub(super) fn initialize_default_profile(state: &mut AppState, config: &crate::config::Config) {
@@ -307,9 +308,7 @@ fn reset_cursor_position_for_focus(state: &mut AppState) {
                     .count()
             }
         }
-        ConfigFocus::ThreadsInput => {
-            state.config.threads.to_string().chars().count()
-        }
+        ConfigFocus::ThreadsInput => state.config.threads.to_string().chars().count(),
         ConfigFocus::MaxWorkersInput => format!("{}", state.config.max_workers).chars().count(),
         ConfigFocus::GopLengthInput => state.config.gop_length.chars().count(),
         ConfigFocus::KeyintMinInput => state.config.keyint_min.chars().count(),
@@ -792,14 +791,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         .container_dropdown_state
                         .selected()
                         .unwrap_or(0);
-                    if current > 0 {
-                        state
-                            .config
-                            .container_dropdown_state
-                            .select(Some(current - 1));
-                    } else {
-                        state.config.container_dropdown_state.select(Some(3)); // wraparound to last
-                    }
+                    let next =
+                        options::next_container_idx(state.config.codec_selection, current, false);
+                    state.config.container_dropdown_state.select(Some(next));
                 }
                 KeyCode::Right | KeyCode::Down => {
                     let current = state
@@ -807,10 +801,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         .container_dropdown_state
                         .selected()
                         .unwrap_or(0);
-                    state
-                        .config
-                        .container_dropdown_state
-                        .select(Some((current + 1) % 4));
+                    let next =
+                        options::next_container_idx(state.config.codec_selection, current, true);
+                    state.config.container_dropdown_state.select(Some(next));
                 }
                 _ => {}
             }
@@ -1435,7 +1428,7 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                 }
                 KeyCode::Down | KeyCode::Right => {
                     let selected = state.config.video_codec_state.selected().unwrap_or(0);
-                    if selected < 1 {
+                    if selected + 1 < crate::ui::constants::VIDEO_CODECS.len() {
                         set_video_codec_selection(&mut state.config, selected + 1);
                     }
                 }
@@ -1488,6 +1481,167 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                 _ => {}
             }
             if state.config.av1_tune_state.selected() != old_selection {
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcVaapiQualitySlider => {
+            let old_value = state.config.hevc.vaapi_quality;
+            state.config.hevc.vaapi_quality = match key.code {
+                KeyCode::Left => old_value.saturating_sub(1).max(1),
+                KeyCode::Right => (old_value + 1).min(51),
+                KeyCode::Home => 1,
+                KeyCode::End => 51,
+                _ => old_value,
+            };
+            if state.config.hevc.vaapi_quality != old_value {
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcVaapiBFramesInput => {
+            let old_value = state.config.hevc.hw_b_frames;
+            state.config.hevc.hw_b_frames = match key.code {
+                KeyCode::Left => old_value.saturating_sub(1),
+                KeyCode::Right => (old_value + 1).min(4),
+                KeyCode::Home => 0,
+                KeyCode::End => 4,
+                _ => old_value,
+            };
+            if state.config.hevc.hw_b_frames != old_value {
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcX265PresetDropdown => {
+            let old_selection = state.config.x265_preset_state.selected();
+            match key.code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    state.config.active_dropdown = Some(ConfigFocus::HevcX265PresetDropdown);
+                }
+                KeyCode::Up | KeyCode::Left => {
+                    let selected = state.config.x265_preset_state.selected().unwrap_or(0);
+                    if selected > 0 {
+                        state.config.x265_preset_state.select(Some(selected - 1));
+                    }
+                }
+                KeyCode::Down | KeyCode::Right => {
+                    let selected = state.config.x265_preset_state.selected().unwrap_or(0);
+                    if selected + 1 < crate::ui::constants::X265_PRESETS.len() {
+                        state.config.x265_preset_state.select(Some(selected + 1));
+                    }
+                }
+                _ => {}
+            }
+            if state.config.x265_preset_state.selected() != old_selection {
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcX265TuneDropdown => {
+            let old_selection = state.config.x265_tune_state.selected();
+            match key.code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    state.config.active_dropdown = Some(ConfigFocus::HevcX265TuneDropdown);
+                }
+                KeyCode::Up | KeyCode::Left => {
+                    let selected = state.config.x265_tune_state.selected().unwrap_or(0);
+                    if selected > 0 {
+                        state.config.x265_tune_state.select(Some(selected - 1));
+                    }
+                }
+                KeyCode::Down | KeyCode::Right => {
+                    let selected = state.config.x265_tune_state.selected().unwrap_or(0);
+                    if selected + 1 < crate::ui::constants::X265_TUNES.len() {
+                        state.config.x265_tune_state.select(Some(selected + 1));
+                    }
+                }
+                _ => {}
+            }
+            if state.config.x265_tune_state.selected() != old_selection {
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcQsvQualityInput
+        | ConfigFocus::HevcQsvPresetInput
+        | ConfigFocus::HevcQsvLookaheadInput
+        | ConfigFocus::HevcQsvBFramesInput => {
+            let focus = state.config.focus;
+            let hevc = &mut state.config.hevc;
+            // (current value, min, max); preset is stored as a "1".."7" string.
+            let (current, min, max) = match focus {
+                ConfigFocus::HevcQsvQualityInput => (hevc.qsv_quality, 1, 51),
+                ConfigFocus::HevcQsvPresetInput => (hevc.hw_preset.parse().unwrap_or(4), 1, 7),
+                ConfigFocus::HevcQsvLookaheadInput => (hevc.hw_lookahead, 0, 100),
+                _ => (hevc.hw_b_frames, 0, 16),
+            };
+            let new_value = match key.code {
+                KeyCode::Left => current.saturating_sub(1).max(min),
+                KeyCode::Right => (current + 1).min(max),
+                KeyCode::Home => min,
+                KeyCode::End => max,
+                _ => current,
+            };
+            match focus {
+                ConfigFocus::HevcQsvQualityInput => hevc.qsv_quality = new_value,
+                ConfigFocus::HevcQsvPresetInput => hevc.hw_preset = new_value.to_string(),
+                ConfigFocus::HevcQsvLookaheadInput => hevc.hw_lookahead = new_value,
+                _ => hevc.hw_b_frames = new_value,
+            }
+            if new_value != current {
+                state.config.is_modified = true;
+            }
+        }
+        // hevc_nvenc settings
+        ConfigFocus::HevcNvencPresetSlider => {
+            let old: u32 = state.config.hevc.hw_preset.parse().unwrap_or(4).clamp(1, 7);
+            let new = step_value(key.code, old, 1, 7);
+            if new != old {
+                state.config.hevc.hw_preset = new.to_string();
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcNvencCqSlider => {
+            let old = state.config.hevc.nvenc_quality.min(51);
+            let new = step_value(key.code, old, 0, 51);
+            if new != old {
+                state.config.hevc.nvenc_quality = new;
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcNvencLookaheadInput => {
+            let old = state.config.hevc.hw_lookahead.min(32);
+            let new = step_value(key.code, old, 0, 32);
+            if new != old {
+                state.config.hevc.hw_lookahead = new;
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcNvencBFramesInput => {
+            let old = state.config.hevc.hw_b_frames.min(4);
+            let new = step_value(key.code, old, 0, 4);
+            if new != old {
+                state.config.hevc.hw_b_frames = new;
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcAmfQpSlider => {
+            let old = state.config.hevc.amf_qp.min(51);
+            let new = step_value(key.code, old, 0, 51);
+            if new != old {
+                state.config.hevc.amf_qp = new;
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcAmfPresetSlider => {
+            let old: u32 = state.config.hevc.hw_preset.parse().unwrap_or(4).clamp(1, 7);
+            let new = step_value(key.code, old, 1, 7);
+            if new != old {
+                state.config.hevc.hw_preset = new.to_string();
+                state.config.is_modified = true;
+            }
+        }
+        ConfigFocus::HevcVideotoolboxQSlider => {
+            let old = state.config.hevc.videotoolbox_q.clamp(1, 100);
+            let new = step_value(key.code, old, 1, 100);
+            if new != old {
+                state.config.hevc.videotoolbox_q = new;
                 state.config.is_modified = true;
             }
         }
@@ -1585,11 +1739,7 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
         ConfigFocus::Av1HwCqSlider => {
             // Per-encoder quality: NVENC uses 0-63, QSV/VAAPI use 1-255
             // Read/write the encoder-specific field based on GPU vendor
-            let (min_cq, max_cq, current_val) = match state.config.gpu_vendor {
-                crate::engine::hardware::GpuVendor::Nvidia => (0, 63, state.config.av1_nvenc_cq),
-                crate::engine::hardware::GpuVendor::Intel => (1, 255, state.config.av1_qsv_cq),
-                _ => (1, 255, state.config.av1_vaapi_cq), // AMD and others use VAAPI
-            };
+            let (min_cq, max_cq, current_val) = state.config.av1_hw_cq();
 
             let old_value = current_val;
             let new_value = match key.code {
@@ -1613,11 +1763,7 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
             };
 
             // Write back to the correct per-encoder field
-            match state.config.gpu_vendor {
-                crate::engine::hardware::GpuVendor::Nvidia => state.config.av1_nvenc_cq = new_value,
-                crate::engine::hardware::GpuVendor::Intel => state.config.av1_qsv_cq = new_value,
-                _ => state.config.av1_vaapi_cq = new_value,
-            };
+            state.config.set_av1_hw_cq(new_value);
 
             if new_value != old_value {
                 state.config.is_modified = true;
@@ -2524,8 +2670,11 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
 fn handle_hw_encoding_toggle(state: &mut AppState) {
     use std::time::Instant;
 
-    if !cfg!(target_os = "linux") {
-        state.config.status_message = Some(("Linux only".into(), Instant::now()));
+    if !state.config.hardware_control_available() {
+        state.config.status_message = Some((
+            "No hardware encoder available for this codec".into(),
+            Instant::now(),
+        ));
         return;
     }
 
@@ -2534,27 +2683,19 @@ fn handle_hw_encoding_toggle(state: &mut AppState) {
         state.config.use_hardware_encoding = false;
         state.config.status_message = Some(("HW encoding disabled".into(), Instant::now()));
     } else {
-        // Turning on - run pre-flight
+        // Turning on - availability for this Codec is already known from the Probe Encodes
         let result = crate::engine::hardware::run_preflight();
-        state.config.hw_encoding_available = Some(result.available);
-        state.config.hw_availability_message = result.error_message.clone();
+        state.config.hw_encoding_available = Some(true);
+        state.config.hw_availability_message = None;
 
-        if result.available {
-            state.config.use_hardware_encoding = true;
-            state.config.gpu_vendor = result.gpu_vendor;
-            state.dashboard.gpu_model = result.gpu_model;
-            state.dashboard.gpu_vendor = result.gpu_vendor;
-            state.dashboard.gpu_available =
-                crate::engine::hardware::gpu_monitoring_available(result.gpu_vendor);
-            // Initialize hardware encoding parameters
-            state.config.vaapi_rc_mode = "1".to_string(); // CQP mode - only supported mode
-            state.config.status_message = Some(("QSV enabled".into(), Instant::now()));
-        } else {
-            state.config.status_message = Some((
-                result.error_message.unwrap_or("Unavailable".into()),
-                Instant::now(),
-            ));
-        }
+        state.config.use_hardware_encoding = true;
+        state.dashboard.gpu_model = result.gpu_model;
+        state.dashboard.gpu_vendor = result.gpu_vendor;
+        state.dashboard.gpu_available =
+            crate::engine::hardware::gpu_monitoring_available(result.gpu_vendor);
+        // Initialize hardware encoding parameters
+        state.config.vaapi_rc_mode = "1".to_string(); // CQP mode - only supported mode
+        state.config.status_message = Some(("Hardware encoding enabled".into(), Instant::now()));
     }
     state.config.is_modified = true;
 }
@@ -2674,6 +2815,18 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
                     let popup = ConfigScreen::calculate_popup_area(trigger, 3, state.viewport);
                     (popup, 3)
                 }
+                ConfigFocus::HevcX265PresetDropdown => {
+                    let trigger = config.hevc_x265_preset_area.unwrap_or_default();
+                    let count = crate::ui::constants::X265_PRESETS.len();
+                    let popup = ConfigScreen::calculate_popup_area(trigger, count, state.viewport);
+                    (popup, count)
+                }
+                ConfigFocus::HevcX265TuneDropdown => {
+                    let trigger = config.hevc_x265_tune_area.unwrap_or_default();
+                    let count = crate::ui::constants::X265_TUNES.len();
+                    let popup = ConfigScreen::calculate_popup_area(trigger, count, state.viewport);
+                    (popup, count)
+                }
                 ConfigFocus::Av1ScmDropdown => {
                     let trigger = config.av1_scm_area.unwrap_or_default();
                     let popup = ConfigScreen::calculate_popup_area(trigger, 3, state.viewport);
@@ -2748,9 +2901,16 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
                                     }
                                     ConfigFocus::ContainerDropdown => {
                                         config.container_dropdown_state.select(Some(item_index));
+                                        config.enforce_container_for_codec();
                                     }
                                     ConfigFocus::Av1TuneDropdown => {
                                         config.av1_tune_state.select(Some(item_index));
+                                    }
+                                    ConfigFocus::HevcX265PresetDropdown => {
+                                        config.x265_preset_state.select(Some(item_index));
+                                    }
+                                    ConfigFocus::HevcX265TuneDropdown => {
+                                        config.x265_tune_state.select(Some(item_index));
                                     }
                                     ConfigFocus::Av1ScmDropdown => {
                                         config.av1_scm_state.select(Some(item_index));
@@ -2776,13 +2936,9 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
                     load_selected_profile(state);
                 } else if was_codec_dropdown {
                     // Update codec_selection enum based on video_codec_state
-                    use crate::ui::state::CodecSelection;
                     let selected = config.video_codec_state.selected().unwrap_or(0);
-                    config.codec_selection = match selected {
-                        0 => CodecSelection::Vp9,
-                        1 => CodecSelection::Av1,
-                        _ => CodecSelection::Vp9,
-                    };
+                    config.codec_selection = crate::ui::options::codec_selection_from_idx(selected);
+                    config.enforce_container_for_codec();
                     config.is_modified = true;
                 } else if was_container_dropdown {
                     // Mark as modified when container changes
@@ -3336,17 +3492,14 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
         // Hardware encoding checkbox
         if let Some(area) = config.hw_encoding_checkbox_area {
             if is_in_rect(mouse.column, mouse.row, area) {
+                if !config.hardware_control_available() {
+                    return;
+                }
                 config.use_hardware_encoding = !config.use_hardware_encoding;
-                // Re-run preflight check if enabling
                 if config.use_hardware_encoding {
-                    use crate::engine::hardware;
-                    let result = hardware::run_preflight();
-                    config.hw_encoding_available = Some(result.available);
-                    config.hw_availability_message = if result.available {
-                        Some("Hardware encoding available".to_string())
-                    } else {
-                        result.error_message
-                    };
+                    config.hw_encoding_available = Some(true);
+                    config.hw_availability_message =
+                        Some("Hardware encoding available".to_string());
                     // Initialize hardware encoding parameters
                     config.vaapi_rc_mode = "1".to_string(); // CQP mode - only supported mode
                 }
@@ -3389,7 +3542,7 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
         }
 
         // VAAPI quality slider (1-255 range)
-        if config.use_hardware_encoding && cfg!(target_os = "linux") {
+        if config.use_hardware_encoding {
             if let Some(area) = config.qsv_quality_slider_area {
                 // Only respond to clicks on the bar line (second line of the 2-line widget)
                 if mouse.row == area.y + 1
@@ -3534,6 +3687,101 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
             }
         }
 
+        if let Some(area) = config.hevc_x265_preset_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcX265PresetDropdown;
+                config.active_dropdown = Some(ConfigFocus::HevcX265PresetDropdown);
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_vaapi_quality_slider_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcVaapiQualitySlider;
+                if mouse.row == area.y + 1
+                    && mouse.column >= area.x
+                    && mouse.column < area.x + area.width
+                {
+                    let click_x = mouse.column.saturating_sub(area.x);
+                    let ratio = (click_x as f64) / (area.width as f64).max(1.0);
+                    config.hevc.vaapi_quality = (ratio * 50.0 + 1.0).clamp(1.0, 51.0) as u32;
+                    config.is_modified = true;
+                }
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_vaapi_b_frames_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcVaapiBFramesInput;
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_x265_tune_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcX265TuneDropdown;
+                config.active_dropdown = Some(ConfigFocus::HevcX265TuneDropdown);
+                return;
+            }
+        }
+
+        for (area, focus) in [
+            (
+                config.hevc_qsv_quality_area,
+                ConfigFocus::HevcQsvQualityInput,
+            ),
+            (config.hevc_qsv_preset_area, ConfigFocus::HevcQsvPresetInput),
+            (
+                config.hevc_qsv_lookahead_area,
+                ConfigFocus::HevcQsvLookaheadInput,
+            ),
+            (
+                config.hevc_qsv_b_frames_area,
+                ConfigFocus::HevcQsvBFramesInput,
+            ),
+        ] {
+            if let Some(area) = area {
+                if is_in_rect(mouse.column, mouse.row, area) {
+                    config.focus = focus;
+                    return;
+                }
+            }
+        }
+
+        if let Some(area) = config.hevc_amf_qp_area
+            && is_in_rect(mouse.column, mouse.row, area)
+        {
+            config.focus = ConfigFocus::HevcAmfQpSlider;
+            if let Some(v) = slider_click_value(mouse, area, 0, 51) {
+                config.hevc.amf_qp = v;
+                config.is_modified = true;
+            }
+            return;
+        }
+
+        if let Some(area) = config.hevc_amf_preset_area
+            && is_in_rect(mouse.column, mouse.row, area)
+        {
+            config.focus = ConfigFocus::HevcAmfPresetSlider;
+            if let Some(v) = slider_click_value(mouse, area, 1, 7) {
+                config.hevc.hw_preset = v.to_string();
+                config.is_modified = true;
+            }
+            return;
+        }
+
+        if let Some(area) = config.hevc_videotoolbox_q_area
+            && is_in_rect(mouse.column, mouse.row, area)
+        {
+            config.focus = ConfigFocus::HevcVideotoolboxQSlider;
+            if let Some(v) = slider_click_value(mouse, area, 1, 100) {
+                config.hevc.videotoolbox_q = v;
+                config.is_modified = true;
+            }
+            return;
+        }
+
         if let Some(area) = config.av1_film_grain_slider_area {
             if is_in_rect(mouse.column, mouse.row, area) {
                 config.focus = ConfigFocus::Av1FilmGrainSlider;
@@ -3612,24 +3860,14 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
                     && mouse.column < area.x + area.width
                 {
                     // Per-encoder quality: NVENC uses 0-63, QSV/VAAPI use 1-255
-                    let (min_cq, max_cq) = match config.gpu_vendor {
-                        crate::engine::hardware::GpuVendor::Nvidia => (0, 63),
-                        crate::engine::hardware::GpuVendor::Intel => (1, 255),
-                        _ => (1, 255), // AMD and others use VAAPI
-                    };
+                    let (min_cq, max_cq, _) = config.av1_hw_cq();
                     let click_x = mouse.column.saturating_sub(area.x);
                     let ratio = (click_x as f64) / (area.width as f64).max(1.0);
                     let range = (max_cq - min_cq) as f64;
                     let new_value =
                         (ratio * range + min_cq as f64).clamp(min_cq as f64, max_cq as f64) as u32;
                     // Write to the correct per-encoder field
-                    match config.gpu_vendor {
-                        crate::engine::hardware::GpuVendor::Nvidia => {
-                            config.av1_nvenc_cq = new_value
-                        }
-                        crate::engine::hardware::GpuVendor::Intel => config.av1_qsv_cq = new_value,
-                        _ => config.av1_vaapi_cq = new_value,
-                    };
+                    config.set_av1_hw_cq(new_value);
                     config.is_modified = true;
                 }
                 return;
@@ -3653,9 +3891,73 @@ pub(super) fn handle_config_mouse(mouse: MouseEvent, state: &mut AppState) {
         if let Some(area) = config.av1_hw_tile_rows_area {
             if is_in_rect(mouse.column, mouse.row, area) {
                 config.focus = ConfigFocus::Av1HwTileRowsInput;
+                return;
+            }
+        }
+
+        // hevc_nvenc settings
+        if let Some(area) = config.hevc_nvenc_preset_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcNvencPresetSlider;
+                if let Some(v) = slider_click_value(mouse, area, 1, 7) {
+                    config.hevc.hw_preset = v.to_string();
+                    config.is_modified = true;
+                }
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_nvenc_cq_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcNvencCqSlider;
+                if let Some(v) = slider_click_value(mouse, area, 0, 51) {
+                    config.hevc.nvenc_quality = v;
+                    config.is_modified = true;
+                }
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_nvenc_lookahead_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcNvencLookaheadInput;
+                return;
+            }
+        }
+
+        if let Some(area) = config.hevc_nvenc_b_frames_area {
+            if is_in_rect(mouse.column, mouse.row, area) {
+                config.focus = ConfigFocus::HevcNvencBFramesInput;
             }
         }
     }
+}
+
+/// New value after a Left/Right/Home/End key on a bounded numeric control.
+fn step_value(code: KeyCode, current: u32, min: u32, max: u32) -> u32 {
+    match code {
+        KeyCode::Left => current.saturating_sub(1).max(min),
+        KeyCode::Right => (current + 1).min(max),
+        KeyCode::Home => min,
+        KeyCode::End => max,
+        _ => current,
+    }
+}
+
+/// The value a click on a slider's bar line selects, if the click hit the bar.
+fn slider_click_value(
+    mouse: crossterm::event::MouseEvent,
+    area: ratatui::layout::Rect,
+    min: u32,
+    max: u32,
+) -> Option<u32> {
+    if mouse.row != area.y + 1 || mouse.column < area.x || mouse.column >= area.x + area.width {
+        return None;
+    }
+    let click_x = mouse.column.saturating_sub(area.x);
+    let ratio = (click_x as f64) / (area.width as f64).max(1.0);
+    let range = (max - min) as f64;
+    Some((ratio * range + min as f64).clamp(min as f64, max as f64) as u32)
 }
 
 // Helper function to check if mouse is within table area
@@ -3829,6 +4131,8 @@ mod tests {
     fn video_codec_key_updates_enum() {
         let mut state = AppState::default();
         state.config.focus = ConfigFocus::VideoCodecDropdown;
+        state.config.video_codec_state.select(Some(0));
+        state.config.codec_selection = crate::ui::state::CodecSelection::Vp9;
 
         handle_focused_widget_key(
             KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
@@ -3839,6 +4143,21 @@ mod tests {
         assert_eq!(
             state.config.codec_selection,
             crate::ui::state::CodecSelection::Av1
+        );
+
+        // ...and on to HEVC, which moves a WebM container to MKV
+        state.config.container_dropdown_state.select(Some(0));
+        handle_focused_widget_key(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(
+            state.config.codec_selection,
+            crate::ui::state::CodecSelection::Hevc
+        );
+        assert_eq!(
+            options::container_from_idx(state.config.container_dropdown_state.selected().unwrap()),
+            "mkv"
         );
     }
 

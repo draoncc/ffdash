@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::hevc_config::HevcConfig;
 use super::vp9_config::Vp9Config;
 
 // Default functions for Av1Config
@@ -138,6 +139,7 @@ impl Default for Av1Config {
 pub enum Codec {
     Vp9(Vp9Config),
     Av1(Av1Config),
+    Hevc(HevcConfig),
 }
 
 impl Default for Codec {
@@ -152,6 +154,7 @@ impl Codec {
         match self {
             Codec::Vp9(_) => "VP9",
             Codec::Av1(_) => "AV1",
+            Codec::Hevc(_) => "HEVC",
         }
     }
 
@@ -163,6 +166,34 @@ impl Codec {
     /// Check if this is AV1
     pub fn is_av1(&self) -> bool {
         matches!(self, Codec::Av1(_))
+    }
+
+    /// Check if this is HEVC
+    pub fn is_hevc(&self) -> bool {
+        matches!(self, Codec::Hevc(_))
+    }
+
+    /// Get HEVC config if this is HEVC
+    pub fn as_hevc(&self) -> Option<&HevcConfig> {
+        match self {
+            Codec::Hevc(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// The HEVC config, or the defaults when this is not HEVC. Borrowed, never cloned.
+    pub fn hevc_or_default(&self) -> &HevcConfig {
+        static DEFAULT: std::sync::OnceLock<HevcConfig> = std::sync::OnceLock::new();
+        self.as_hevc()
+            .unwrap_or_else(|| DEFAULT.get_or_init(HevcConfig::default))
+    }
+
+    /// Get mutable HEVC config if this is HEVC
+    pub fn as_hevc_mut(&mut self) -> Option<&mut HevcConfig> {
+        match self {
+            Codec::Hevc(config) => Some(config),
+            _ => None,
+        }
     }
 
     /// Get VP9 config if this is VP9

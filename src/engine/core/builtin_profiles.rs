@@ -2,7 +2,8 @@
 //!
 //! This module contains all the hardcoded profile presets that ship with ffdash.
 //! Profiles are organized into categories:
-//! - Base codec profiles (av1-svt, av1-qsv, av1-nvenc, av1-vaapi, vp9-*, hevc-*)
+//! - Base codec profiles (av1-svt, av1-qsv, av1-nvenc, av1-vaapi, vp9-*; hevc-* live in
+//!   `builtin_hevc_profiles`)
 //! - Hardware test profiles (for validation and testing)
 //! - User-friendly named profiles (4K Film, 1080p Shrinker, etc.)
 
@@ -23,6 +24,7 @@ impl Profile {
             "av1-vaapi" => Self::av1_vaapi(),
             "vp9-good" => Self::vp9_good(),
             "vp9-best" => Self::vp9_best(),
+            n if n.starts_with("hevc-") => Self::hevc(n).unwrap_or_else(Self::vp9_good),
             _ => Self::vp9_good(), // default
         }
     }
@@ -140,12 +142,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: false,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -242,12 +238,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -344,12 +334,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -446,12 +430,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -554,12 +532,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: false,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Vp9(Vp9Config::default()),
             vmaf_enabled: false,
             vmaf_target: 93.0,
@@ -658,12 +630,6 @@ impl Profile {
             color_trc: 1,
             color_range: -1,
             use_hardware_encoding: false,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -763,12 +729,6 @@ impl Profile {
             color_trc: 1,
             color_range: -1,
             use_hardware_encoding: false,
-            hw_rc_mode: 1,
-            hw_global_quality: 70,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 8,
                 tune: 0,
@@ -867,12 +827,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 125,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 6,
                 tune: 0,
@@ -971,12 +925,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 85,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 6,
                 tune: 0,
@@ -1075,12 +1023,6 @@ impl Profile {
             color_trc: -1,
             color_range: -1,
             use_hardware_encoding: true,
-            hw_rc_mode: 1,
-            hw_global_quality: 85,
-            hw_b_frames: 0,
-            hw_loop_filter_level: 16,
-            hw_loop_filter_sharpness: 4,
-            hw_compression_level: 4,
             codec: Codec::Av1(Av1Config {
                 preset: 6,
                 tune: 0,

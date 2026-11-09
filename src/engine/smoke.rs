@@ -3,8 +3,7 @@
 //! Produces structured results (pretty or JSON) so humans and agents can act on them.
 
 use crate::engine::core::{
-    HwEncodingConfig, Profile, VideoJob, build_ffmpeg_cmds_with_profile, ffmpeg_version,
-    two_pass_log_prefix,
+    EncodePlan, Profile, VideoJob, build_encode_cmds_synced, ffmpeg_version, two_pass_log_prefix,
 };
 use crate::engine::hardware::{self, VideoEncoder};
 use anyhow::{Context, Result, anyhow};
@@ -105,6 +104,7 @@ pub fn run_smoke_tests(opts: SmokeTestOptions) -> Result<SmokeSummary> {
                             &profile.codec,
                             profile.use_hardware_encoding,
                             Some(&profile.video_codec),
+                            8,
                         )),
                         expected_hardware: profile.use_hardware_encoding,
                         status: SmokeStatus::Skipped,
@@ -125,6 +125,30 @@ pub fn run_smoke_tests(opts: SmokeTestOptions) -> Result<SmokeSummary> {
                     anyhow!("Missing input path for smoke-test (validate_only=false)")
                 })?;
 
+                // Only run a profile whose own Encoder passes its Probe Encode here.
+                let encoder = encoder_for(&profile, input);
+                if !runs_on_its_own_encoder(&profile, encoder) {
+                    results.push(ProfileSmokeResult {
+                        profile: profile.name.clone(),
+                        encoder: describe_encoder(&encoder),
+                        expected_hardware: true,
+                        status: SmokeStatus::Skipped,
+                        duration_ms: profile_load_start.elapsed().as_millis(),
+                        error: None,
+                        stderr_tail: None,
+                        note: Some(
+                            "this profile's hardware Encoder did not pass its Probe Encode on this machine"
+                                .to_string(),
+                        ),
+                        command: String::new(),
+                        output_bitrate_kbps: None,
+                        output_size_bytes: None,
+                        video_codec: None,
+                        audio_codec: None,
+                    });
+                    continue;
+                }
+
                 match run_profile(&profile, input, &temp_dir, opts.max_frames) {
                     Ok(mut res) => {
                         res.duration_ms = res
@@ -135,11 +159,7 @@ pub fn run_smoke_tests(opts: SmokeTestOptions) -> Result<SmokeSummary> {
                     Err(e) => {
                         results.push(ProfileSmokeResult {
                             profile: profile.name.clone(),
-                            encoder: describe_encoder(&hardware::select_encoder(
-                                &profile.codec,
-                                profile.use_hardware_encoding,
-                                Some(&profile.video_codec),
-                            )),
+                            encoder: describe_encoder(&encoder),
                             expected_hardware: profile.use_hardware_encoding,
                             status: SmokeStatus::Failed,
                             duration_ms: profile_load_start.elapsed().as_millis(),
@@ -280,6 +300,29 @@ fn load_profile(name: &str) -> Result<Profile> {
     Err(anyhow!("Profile '{}' not found", name))
 }
 
+/// The Encoder this profile would use on `input` on this machine.
+fn encoder_for(profile: &Profile, input: &Path) -> VideoEncoder {
+    hardware::select_encoder(
+        &profile.codec,
+        profile.use_hardware_encoding,
+        Some(&profile.video_codec),
+        crate::engine::required_bit_depth(profile, input),
+    )
+}
+
+/// Whether `selected` (what selection picked on this machine) is the Encoder `profile`
+/// is meant to exercise. A software profile always runs; a hardware profile only runs on
+/// its own Encoder, so `hevc-amf` is skipped on a machine that only has NVENC.
+fn runs_on_its_own_encoder(profile: &Profile, selected: VideoEncoder) -> bool {
+    if !profile.use_hardware_encoding {
+        return true;
+    }
+    match VideoEncoder::from_ffmpeg_name(&profile.video_codec) {
+        Some(own) if own.is_hardware() => selected == own,
+        _ => selected.is_hardware(),
+    }
+}
+
 fn describe_encoder(enc: &VideoEncoder) -> String {
     enc.ffmpeg_name().to_string()
 }
@@ -338,14 +381,12 @@ fn run_profile(
         let _ = fs::create_dir_all(dir);
     }
 
-    let hw_cfg = profile
-        .use_hardware_encoding
-        .then_some(HwEncodingConfig::default());
-    let encoder = hardware::select_encoder(
-        &profile.codec,
-        profile.use_hardware_encoding,
-        Some(&profile.video_codec),
+    let plan = EncodePlan::for_profile(
+        profile,
+        false,
+        crate::engine::required_bit_depth(profile, input),
     );
+    let encoder = plan.encoder;
 
     // Ensure outputs land in temp dir (one file per profile)
     job.output_path = temp_dir.join(format!(
@@ -354,7 +395,7 @@ fn run_profile(
         profile.container.as_str()
     ));
 
-    let mut cmds = build_ffmpeg_cmds_with_profile(&job, hw_cfg.as_ref(), Some(profile));
+    let mut cmds = build_encode_cmds_synced(&job, profile, &plan);
     let command_text = cmds
         .iter()
         .map(stringify_command)
@@ -444,10 +485,8 @@ fn format_command_preview(profile: &Profile, max_frames: u32, validate_only: boo
     );
     job.overwrite = true;
 
-    let hw_cfg = profile
-        .use_hardware_encoding
-        .then_some(HwEncodingConfig::default());
-    let mut cmds = build_ffmpeg_cmds_with_profile(&job, hw_cfg.as_ref(), Some(profile));
+    let mut cmds =
+        build_encode_cmds_synced(&job, profile, &EncodePlan::for_profile(profile, false, 8));
     for cmd in cmds.iter_mut() {
         if !validate_only {
             cmd.arg("-frames:v").arg(max_frames.to_string());
@@ -546,4 +585,28 @@ fn analyze_output(path: &Path) -> Result<OutputInfo> {
         video_codec,
         audio_codec,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hardware_profile_runs_only_on_its_own_encoder() {
+        let amf = Profile::get("hevc-amf");
+        assert!(amf.use_hardware_encoding);
+        assert!(runs_on_its_own_encoder(&amf, VideoEncoder::HevcAmf));
+        assert!(!runs_on_its_own_encoder(&amf, VideoEncoder::HevcNvenc));
+        assert!(!runs_on_its_own_encoder(&amf, VideoEncoder::Libx265));
+
+        let qsv = Profile::get("av1-qsv");
+        assert!(runs_on_its_own_encoder(&qsv, VideoEncoder::Av1Qsv));
+        assert!(!runs_on_its_own_encoder(&qsv, VideoEncoder::Av1Nvenc));
+    }
+
+    #[test]
+    fn software_profile_always_runs() {
+        let x265 = Profile::get("hevc-x265");
+        assert!(runs_on_its_own_encoder(&x265, VideoEncoder::Libx265));
+    }
 }

@@ -8,8 +8,7 @@ use std::thread;
 use uuid::Uuid;
 
 use super::{
-    HwEncodingConfig, JobStatus, Profile, ProgressParser, VideoJob,
-    encode_job_with_callback_and_profile,
+    EncodePlan, JobStatus, Profile, ProgressParser, VideoJob, encode_job_with_callback_and_profile,
 };
 
 /// Message from worker to main thread
@@ -29,6 +28,7 @@ pub enum WorkerMessage {
         size_bytes: Option<u64>,
         vmaf_result: Option<f32>,
         vmaf_target: Option<f32>,
+        encoder: Option<String>,
         status: JobStatus,
     },
 
@@ -79,9 +79,9 @@ impl WorkerPool {
         &self,
         worker_id: usize,
         job: VideoJob,
-        hw_config: Option<HwEncodingConfig>,
+        plan: Option<EncodePlan>,
     ) -> Result<()> {
-        self.spawn_worker_with_profile(worker_id, job, hw_config, None)
+        self.spawn_worker_with_profile(worker_id, job, plan, None)
     }
 
     /// Spawn a worker to encode a job with optional profile override
@@ -89,7 +89,7 @@ impl WorkerPool {
         &self,
         worker_id: usize,
         mut job: VideoJob,
-        hw_config: Option<HwEncodingConfig>,
+        plan: Option<EncodePlan>,
         profile: Option<Profile>,
     ) -> Result<()> {
         let tx = self.tx.clone();
@@ -123,6 +123,7 @@ impl WorkerPool {
                     size_bytes: job.size_bytes,
                     vmaf_result: job.vmaf_result,
                     vmaf_target: job.vmaf_target,
+                    encoder: job.encoder.clone(),
                     status: job.status.clone(),
                 });
             };
@@ -131,7 +132,7 @@ impl WorkerPool {
             let result = encode_job_with_callback_and_profile(
                 &mut job,
                 true,
-                hw_config.as_ref(),
+                plan.as_ref(),
                 profile.as_ref(),
                 Some(pid_registry),
                 progress_callback,

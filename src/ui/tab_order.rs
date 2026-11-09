@@ -78,7 +78,22 @@ impl ConfigFocus {
             | Self::Av1HwCqSlider
             | Self::Av1HwLookaheadInput
             | Self::Av1HwTileColsInput
-            | Self::Av1HwTileRowsInput => CoreVideo,
+            | Self::Av1HwTileRowsInput
+            | Self::HevcX265PresetDropdown
+            | Self::HevcX265TuneDropdown
+            | Self::HevcNvencPresetSlider
+            | Self::HevcNvencCqSlider
+            | Self::HevcNvencLookaheadInput
+            | Self::HevcNvencBFramesInput
+            | Self::HevcQsvQualityInput
+            | Self::HevcQsvPresetInput
+            | Self::HevcQsvLookaheadInput
+            | Self::HevcQsvBFramesInput
+            | Self::HevcAmfQpSlider
+            | Self::HevcAmfPresetSlider
+            | Self::HevcVideotoolboxQSlider
+            | Self::HevcVaapiQualitySlider
+            | Self::HevcVaapiBFramesInput => CoreVideo,
 
             Self::RowMtCheckbox
             | Self::TileColumnsSlider
@@ -171,6 +186,21 @@ impl ConfigFocus {
             Self::Av1HwLookaheadInput => c.av1_hw_lookahead_area,
             Self::Av1HwTileColsInput => c.av1_hw_tile_cols_area,
             Self::Av1HwTileRowsInput => c.av1_hw_tile_rows_area,
+            Self::HevcX265PresetDropdown => c.hevc_x265_preset_area,
+            Self::HevcX265TuneDropdown => c.hevc_x265_tune_area,
+            Self::HevcNvencPresetSlider => c.hevc_nvenc_preset_area,
+            Self::HevcNvencCqSlider => c.hevc_nvenc_cq_area,
+            Self::HevcNvencLookaheadInput => c.hevc_nvenc_lookahead_area,
+            Self::HevcNvencBFramesInput => c.hevc_nvenc_b_frames_area,
+            Self::HevcQsvQualityInput => c.hevc_qsv_quality_area,
+            Self::HevcQsvPresetInput => c.hevc_qsv_preset_area,
+            Self::HevcQsvLookaheadInput => c.hevc_qsv_lookahead_area,
+            Self::HevcQsvBFramesInput => c.hevc_qsv_b_frames_area,
+            Self::HevcAmfQpSlider => c.hevc_amf_qp_area,
+            Self::HevcAmfPresetSlider => c.hevc_amf_preset_area,
+            Self::HevcVideotoolboxQSlider => c.hevc_videotoolbox_q_area,
+            Self::HevcVaapiQualitySlider => c.hevc_vaapi_quality_slider_area,
+            Self::HevcVaapiBFramesInput => c.hevc_vaapi_b_frames_area,
             Self::RowMtCheckbox => c.row_mt_checkbox_area,
             Self::TileColumnsSlider => c.tile_columns_slider_area,
             Self::TileRowsSlider => c.tile_rows_slider_area,
@@ -224,8 +254,8 @@ impl ConfigFocus {
     /// area even when they are hidden or greyed out, so rendering alone isn't enough.
     fn is_usable(&self, c: &ConfigState) -> bool {
         match self {
-            // Greyed out and inert outside Linux
-            Self::HardwareEncodingCheckbox => cfg!(target_os = "linux"),
+            // Greyed out and inert unless the Codec has a Hardware Encoder available
+            Self::HardwareEncodingCheckbox => c.hardware_control_available(),
             // Passthrough has no bitrate or downmix
             Self::AudioPrimaryBitrate | Self::AudioPrimaryDownmix => {
                 !c.audio_primary_codec.is_passthrough()
@@ -343,9 +373,40 @@ mod tests {
         }
         assert!(order.contains(&ConfigFocus::AudioAc3Checkbox));
         assert!(order.contains(&ConfigFocus::AudioStereoCheckbox));
-        if !cfg!(target_os = "linux") {
-            assert!(!order.contains(&ConfigFocus::HardwareEncodingCheckbox));
-        }
+    }
+
+    fn tab_order_with(
+        codec: crate::ui::state::CodecSelection,
+        availability: crate::engine::selection::EncoderAvailability,
+    ) -> Vec<ConfigFocus> {
+        let mut state = ConfigState {
+            codec_selection: codec,
+            encoder_availability: availability,
+            ..Default::default()
+        };
+        render(&mut state, 200, 60);
+        tab_order(&state)
+    }
+
+    #[test]
+    fn hardware_checkbox_is_in_tab_order_iff_the_codec_has_a_hardware_encoder() {
+        use crate::engine::hardware::VideoEncoder::*;
+        use crate::engine::selection::EncoderAvailability;
+        use crate::ui::state::CodecSelection::{Av1, Vp9};
+        let hw = ConfigFocus::HardwareEncodingCheckbox;
+
+        // Whatever the host OS: NVENC for AV1 enables it for AV1 only
+        let nvenc = EncoderAvailability::default().with(Av1Nvenc, true);
+        assert!(tab_order_with(Av1, nvenc.clone()).contains(&hw));
+        assert!(!tab_order_with(Vp9, nvenc).contains(&hw));
+
+        let qsv = EncoderAvailability::default().with(Vp9Qsv, false);
+        assert!(tab_order_with(Vp9, qsv).contains(&hw));
+
+        // Software only, or nothing probed: not offered
+        let software = EncoderAvailability::default().with(LibsvtAv1, true);
+        assert!(!tab_order_with(Av1, software).contains(&hw));
+        assert!(!tab_order_with(Av1, EncoderAvailability::default()).contains(&hw));
     }
 
     #[test]

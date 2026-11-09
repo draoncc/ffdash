@@ -1,6 +1,6 @@
 # ffdash
 
-A terminal UI for batch VP9/AV1 video encoding with hardware acceleration, real-time progress monitoring, and full control over quality settings. Made to work as a dashboard over SSH.
+A terminal UI for batch VP9/AV1/HEVC video encoding with hardware acceleration, real-time progress monitoring, and full control over quality settings. Made to work as a dashboard over SSH.
 
 https://github.com/user-attachments/assets/f7551d5f-fe6c-4a13-81e2-92a5e2bb42c2
 
@@ -11,7 +11,7 @@ https://github.com/user-attachments/assets/f7551d5f-fe6c-4a13-81e2-92a5e2bb42c2
 ## Why ffdash?
 
 - **Batch processing** - Encode entire directories with parallel workers, adjustable on the fly
-- **Hardware acceleration** - QSV, VA-API (Intel/AMD) and NVENC (NVIDIA >= Ada Lovelace) for fast encodes
+- **Hardware acceleration** - QSV, VA-API (Intel/AMD), NVENC (NVIDIA) and AMF (AMD) on Linux, Windows and macOS, for fast encodes
 - **Auto-VMAF calibration** - Automatically tune quality to hit a target VMAF score
 - **Encoding profiles** - Save and load encoding presets for different use cases
 - **Live dashboard** - Real-time ETA, throughput, queue progress, and system stats
@@ -21,9 +21,11 @@ https://github.com/user-attachments/assets/f7551d5f-fe6c-4a13-81e2-92a5e2bb42c2
 
 ![stats](https://github.com/user-attachments/assets/44fa1a89-e541-4557-9dc0-81463c5567e5)
 
-### Why VP9/AV1?
+### Why VP9/AV1/HEVC?
 
 **VP9** delivers 20-50% smaller files than H.264 at equivalent quality. **AV1** is the next-generation codec offering slightly better compression than VP9. Both are open-source, royalty-free, and natively supported by YouTube, all modern browsers, and media servers like Plex and Jellyfin.
+
+**HEVC** (also known as H.265) is the choice when the files must play on TVs, Apple devices, or other players without AV1 or VP9 support. ffdash encodes it with `libx265` (Main and Main10, HDR10 kept), writes MKV by default, and tags MP4 output `hvc1` so QuickTime and Apple players open it. WebM cannot hold HEVC, so it is not offered with this codec.
 
 Typical file sizes:
 - **1080p TV episode**: ~200-400 MB
@@ -56,16 +58,21 @@ make deps
 
 ### Optional (Hardware Encoding)
 
-| Platform | Requirements |
-|----------|-------------|
-| **Intel QSV** | Linux, `/dev/dri` device mapped, Intel HD 5000+ or Arc GPU |
-| **Intel/AMD VA-API** | Linux, `/dev/dri` device mapped, Mesa VAAPI drivers |
-| **NVIDIA NVENC** | Linux, CUDA drivers, Ada Lovelace+ (RTX 4000 series or newer) |
+Hardware encoding works on Linux, Windows and macOS. ffdash decides what is usable by running a short Probe Encode for each Encoder FFmpeg lists, so an Encoder your GPU or driver can't run is never offered. The Hardware Encoding control in the Config screen is enabled whenever any Hardware Encoder is available for the selected codec; the dashboard shows the Encoder each job actually uses.
+
+| Encoder | Platforms | Requirements |
+|---------|-----------|--------------|
+| **Intel QSV** | Linux, Windows | Intel HD 5000+ or Arc GPU; on Linux `/dev/dri` mapped |
+| **VA-API (Intel/AMD)** | Linux | `/dev/dri` device mapped, Mesa VAAPI drivers |
+| **NVIDIA NVENC** | Linux, Windows | NVIDIA drivers, Ada Lovelace+ for AV1 (RTX 4000 series or newer) |
+| **AMD AMF** | Windows | AMD GPU with AMF-capable driver |
+
+On Windows and macOS, input is decoded on the CPU and handed to the Hardware Encoder.
 
 Verify hardware support:
 ```bash
 ffdash check-vaapi                    # Intel/AMD VA-API
-ffmpeg -encoders | grep -E "vp9|av1"  # List available VP9/AV1 encoders
+ffmpeg -encoders | grep -E "vp9|av1|265|hevc"  # List available VP9/AV1/HEVC encoders
 ```
 
 ## Installation
@@ -313,6 +320,12 @@ ffmpeg -h encoder=libsvtav1     # Software AV1 (SVT-AV1)
 ffmpeg -h encoder=av1_qsv       # Intel Quick Sync AV1
 ffmpeg -h encoder=av1_nvenc     # NVIDIA NVENC AV1
 ffmpeg -h encoder=av1_vaapi     # VA-API AV1
+
+# HEVC encoders
+ffmpeg -h encoder=libx265       # Software HEVC (x265)
+ffmpeg -h encoder=hevc_nvenc    # NVIDIA NVENC HEVC
+ffmpeg -h encoder=hevc_qsv      # Intel Quick Sync HEVC
+ffmpeg -h encoder=hevc_vaapi    # VA-API HEVC
 ```
 
 
@@ -320,6 +333,10 @@ ffmpeg -h encoder=av1_vaapi     # VA-API AV1
 #### Encoding
 - [x] VP9 software encoding (libvpx-vp9)
 - [x] AV1 software encoding (SVT-AV1)
+- [x] HEVC software encoding (libx265, Main10/HDR10)
+- [x] NVIDIA NVENC hardware encoding (HEVC)
+- [x] Intel QSV hardware encoding (HEVC, Linux and Windows)
+- [x] HEVC VA-API hardware encoding (hevc_vaapi, Main10)
 - [x] Intel QSV hardware encoding (VP9, AV1)
 - [x] Intel/AMD VA-API hardware encoding (VP9, AV1)
 - [x] NVIDIA NVENC hardware encoding (AV1)
@@ -358,7 +375,7 @@ ffmpeg -h encoder=av1_vaapi     # VA-API AV1
 
 ## Known Limitations
 
-- Hardware encoding (QSV/VA-API/NVENC) requires Linux; Win/macOS are untested
+- Hardware encoding on Windows and macOS is untested; Linux has the most coverage
 - AMD VA-API support depends on Mesa driver version and GPU generation (AMD is untested)
 - NVENC behavior varies by driver version and GPU architecture
 - Blu-ray MKVs with complex stream layouts may show inaccurate ETA/progress (file size is accurate)

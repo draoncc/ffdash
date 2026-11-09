@@ -2,29 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::Path;
 
+use crate::engine::hardware::VideoEncoder;
 use crate::engine::validate::{HardwareAvailability, validate_profile};
 
 // Re-export codec-specific configs from their dedicated modules
 pub use super::av1_config::{Av1Config, Codec};
-pub use super::hw_config::HwEncodingConfig;
 pub use super::vp9_config::Vp9Config;
-
-// Default values for Profile fields (hardware encoding)
-fn default_hw_quality() -> u32 {
-    70
-}
-fn default_hw_loop_filter() -> u32 {
-    16
-}
-fn default_hw_loop_filter_sharpness() -> u32 {
-    4
-}
-fn default_hw_rc_mode() -> u32 {
-    1
-} // CQP mode (only supported - ICQ/VBR/CBR removed due to Arc driver bugs)
-fn default_hw_compression_level() -> u32 {
-    4
-} // Balanced speed/compression
 
 fn default_zero_string() -> String {
     "0".to_string()
@@ -201,24 +184,6 @@ pub struct Profile {
     // Hardware encoding settings (Intel Arc VAAPI)
     #[serde(default)]
     pub use_hardware_encoding: bool,
-
-    #[serde(default = "default_hw_rc_mode")]
-    pub hw_rc_mode: u32,
-
-    #[serde(default = "default_hw_quality")]
-    pub hw_global_quality: u32,
-
-    #[serde(default)]
-    pub hw_b_frames: u32,
-
-    #[serde(default = "default_hw_loop_filter")]
-    pub hw_loop_filter_level: u32,
-
-    #[serde(default = "default_hw_loop_filter_sharpness")]
-    pub hw_loop_filter_sharpness: u32,
-
-    #[serde(default = "default_hw_compression_level")]
-    pub hw_compression_level: u32,
 
     // Codec-specific configuration (VP9 or AV1)
     // When loading old profiles without this field, defaults to VP9
@@ -415,12 +380,6 @@ impl Profile {
 
             // Hardware encoding settings
             use_hardware_encoding: config.use_hardware_encoding,
-            hw_rc_mode: config.vaapi_rc_mode.parse().unwrap_or(1), // Default to CQP
-            hw_global_quality: config.qsv_global_quality,
-            hw_b_frames: config.vaapi_b_frames.parse().unwrap_or(0),
-            hw_loop_filter_level: config.vaapi_loop_filter_level.parse().unwrap_or(16),
-            hw_loop_filter_sharpness: config.vaapi_loop_filter_sharpness.parse().unwrap_or(4),
-            hw_compression_level: config.vaapi_compression_level.parse().unwrap_or(4),
 
             // Codec-specific config
             codec: match config.codec_selection {
@@ -464,6 +423,18 @@ impl Profile {
                     hw_denoise: config.hw_denoise.parse().unwrap_or(0),
                     hw_detail: config.hw_detail.parse().unwrap_or(0),
                 }),
+                crate::ui::state::CodecSelection::Hevc => {
+                    let mut hevc = config.hevc.clone();
+                    hevc.x265_preset = crate::ui::options::x265_preset_from_idx(
+                        config.x265_preset_state.selected().unwrap_or(0),
+                    );
+                    hevc.x265_tune = crate::ui::options::x265_tune_from_idx(
+                        config.x265_tune_state.selected().unwrap_or(0),
+                    );
+                    // libx265's CRF is edited with the shared CRF slider (x265 tops out at 51).
+                    hevc.x265_crf = config.crf.min(51);
+                    Codec::Hevc(hevc)
+                }
                 crate::ui::state::CodecSelection::Av1 => {
                     let tune_idx = config.av1_tune_state.selected().unwrap_or(0);
                     let scm_idx = config.av1_scm_state.selected().unwrap_or(0);
@@ -688,12 +659,6 @@ impl Profile {
 
         // Hardware encoding settings
         config.use_hardware_encoding = self.use_hardware_encoding;
-        config.vaapi_rc_mode = self.hw_rc_mode.to_string();
-        config.qsv_global_quality = self.hw_global_quality;
-        config.vaapi_b_frames = self.hw_b_frames.to_string();
-        config.vaapi_loop_filter_level = self.hw_loop_filter_level.to_string();
-        config.vaapi_loop_filter_sharpness = self.hw_loop_filter_sharpness.to_string();
-        config.vaapi_compression_level = self.hw_compression_level.to_string();
 
         // Apply codec-specific settings
         match &self.codec {
@@ -708,6 +673,12 @@ impl Profile {
                 config.vp9_qsv_preset = vp9.qsv_preset;
                 config.vp9_qsv_lookahead = vp9.qsv_look_ahead;
                 config.vp9_qsv_lookahead_depth = vp9.qsv_look_ahead_depth;
+                config.vaapi_rc_mode = vp9.hw_rc_mode.to_string();
+                config.qsv_global_quality = vp9.hw_global_quality;
+                config.vaapi_b_frames = vp9.hw_b_frames.to_string();
+                config.vaapi_loop_filter_level = vp9.hw_loop_filter_level.to_string();
+                config.vaapi_loop_filter_sharpness = vp9.hw_loop_filter_sharpness.to_string();
+                config.vaapi_compression_level = vp9.hw_compression_level.to_string();
                 config.hw_denoise = vp9.hw_denoise.to_string();
                 config.hw_detail = vp9.hw_detail.to_string();
             }
@@ -745,6 +716,24 @@ impl Profile {
                 config.av1_hw_tile_rows = av1.hw_tile_rows;
                 config.hw_denoise = av1.hw_denoise.to_string();
                 config.hw_detail = av1.hw_detail.to_string();
+            }
+            Codec::Hevc(hevc) => {
+                config.codec_selection = crate::ui::options::codec_selection_from_idx(2);
+                config
+                    .video_codec_state
+                    .select(Some(crate::ui::options::codec_selection_to_idx(
+                        config.codec_selection,
+                    )));
+                config.hevc = hevc.clone();
+                config.crf = hevc.x265_crf;
+                config
+                    .x265_preset_state
+                    .select(Some(crate::ui::options::x265_preset_to_idx(
+                        &hevc.x265_preset,
+                    )));
+                config
+                    .x265_tune_state
+                    .select(Some(crate::ui::options::x265_tune_to_idx(&hevc.x265_tune)));
             }
         }
 
@@ -793,9 +782,62 @@ impl Profile {
         Ok(profiles_path)
     }
 
+    /// Apply a Quality Override: set the *active Encoder's* own quality field.
+    ///
+    /// Software VP9 keeps its CRF at the profile root; every other Encoder has its
+    /// quality in its codec config.
+    pub fn apply_quality_override(&mut self, encoder: VideoEncoder, quality: u32) {
+        match (&mut self.codec, encoder) {
+            (Codec::Vp9(vp9), VideoEncoder::Vp9Qsv | VideoEncoder::Vp9Vaapi) => {
+                vp9.hw_global_quality = quality;
+            }
+            (Codec::Av1(av1), VideoEncoder::LibsvtAv1 | VideoEncoder::LibaomAv1) => {
+                av1.svt_crf = quality;
+                self.crf = quality;
+            }
+            (Codec::Av1(av1), VideoEncoder::Av1Qsv) => av1.qsv_cq = quality,
+            (Codec::Av1(av1), VideoEncoder::Av1Nvenc) => av1.nvenc_cq = quality,
+            (Codec::Av1(av1), VideoEncoder::Av1Vaapi) => av1.vaapi_cq = quality,
+            (Codec::Av1(av1), VideoEncoder::Av1Amf) => av1.hw_cq = quality,
+            (Codec::Hevc(hevc), VideoEncoder::Libx265) => {
+                hevc.x265_crf = quality;
+                self.crf = quality;
+            }
+            // Extension point: one arm per HEVC hardware Encoder, setting its own field.
+            // (Until an Encoder's ticket lands, it keeps the shared `crf` fallback.)
+            (Codec::Hevc(hevc), VideoEncoder::HevcNvenc) => hevc.nvenc_quality = quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcQsv) => hevc.qsv_quality = quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcVaapi) => hevc.vaapi_quality = quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcAmf) => hevc.amf_qp = quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcVideotoolbox) => hevc.videotoolbox_q = quality,
+            _ => self.crf = quality,
+        }
+    }
+
+    /// The *active Encoder's* own configured quality (what a Quality Override replaces).
+    pub fn active_quality(&self, encoder: VideoEncoder) -> u32 {
+        match (&self.codec, encoder) {
+            (Codec::Vp9(vp9), VideoEncoder::Vp9Qsv | VideoEncoder::Vp9Vaapi) => {
+                vp9.hw_global_quality
+            }
+            (Codec::Av1(av1), VideoEncoder::LibsvtAv1 | VideoEncoder::LibaomAv1) => av1.svt_crf,
+            (Codec::Av1(av1), VideoEncoder::Av1Qsv) => av1.qsv_cq,
+            (Codec::Av1(av1), VideoEncoder::Av1Nvenc) => av1.nvenc_cq,
+            (Codec::Av1(av1), VideoEncoder::Av1Vaapi) => av1.vaapi_cq,
+            (Codec::Av1(av1), VideoEncoder::Av1Amf) => av1.hw_cq,
+            (Codec::Hevc(hevc), VideoEncoder::Libx265) => hevc.x265_crf,
+            (Codec::Hevc(hevc), VideoEncoder::HevcNvenc) => hevc.nvenc_quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcQsv) => hevc.qsv_quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcVaapi) => hevc.vaapi_quality,
+            (Codec::Hevc(hevc), VideoEncoder::HevcAmf) => hevc.amf_qp,
+            (Codec::Hevc(hevc), VideoEncoder::HevcVideotoolbox) => hevc.videotoolbox_q,
+            _ => self.crf,
+        }
+    }
+
     /// Synchronize legacy fields from the codec-specific configuration.
     ///
-    /// This ensures video_codec, crf, hw_global_quality, and other legacy fields
+    /// This ensures video_codec, crf, and other legacy fields
     /// match the active Codec enum configuration. This is necessary because:
     /// 1. The UI updates codec-specific fields (e.g., Av1Config::hw_cq)
     /// 2. But command builders may still read legacy fields
@@ -813,13 +855,7 @@ impl Profile {
                     "libvpx-vp9".to_string()
                 };
 
-                // Sync quality settings
-                if self.use_hardware_encoding {
-                    self.hw_global_quality = vp9.hw_global_quality;
-                } else {
-                    // Software VP9 uses crf from profile root (not in Vp9Config)
-                    // Keep existing self.crf value
-                }
+                // Software VP9 uses crf from the profile root (not in Vp9Config).
 
                 // Sync VP9-specific settings
                 self.cpu_used = vp9.cpu_used;
@@ -844,31 +880,23 @@ impl Profile {
                 self.tune_content = vp9.tune_content.clone();
                 self.undershoot_pct = vp9.undershoot_pct;
                 self.overshoot_pct = vp9.overshoot_pct;
-
-                // Sync hardware-specific settings
-                self.hw_rc_mode = vp9.hw_rc_mode;
-                self.hw_b_frames = vp9.hw_b_frames;
-                self.hw_loop_filter_level = vp9.hw_loop_filter_level;
-                self.hw_loop_filter_sharpness = vp9.hw_loop_filter_sharpness;
-                self.hw_compression_level = vp9.hw_compression_level;
             }
-            Codec::Av1(av1) => {
+            Codec::Av1(_) => {
                 // Sync video_codec hint (will be refined by select_encoder)
                 self.video_codec = if self.use_hardware_encoding {
                     "av1_qsv".to_string() // Placeholder - select_encoder will choose best
                 } else {
                     "libsvtav1".to_string()
                 };
-
-                // Sync quality settings
-                if self.use_hardware_encoding {
-                    // Hardware AV1 uses hw_cq -> hw_global_quality
-                    self.hw_global_quality = av1.hw_cq;
+            }
+            Codec::Hevc(_) => {
+                // Only the Software Fallback is named: hardware has no placeholder
+                // preference, so `select_encoder` uses its default priority order.
+                self.video_codec = if self.use_hardware_encoding {
+                    String::new()
                 } else {
-                    // Software AV1: libsvtav1 doesn't use CRF in the same way
-                    // Keep existing self.crf if set, otherwise use preset-based quality
-                    // Note: libsvtav1 primarily uses preset + crf combination
-                }
+                    "libx265".to_string()
+                };
             }
         }
     }
@@ -902,6 +930,21 @@ impl Profile {
                     }
                 } else {
                     "libsvtav1"
+                }
+            }
+            Codec::Hevc(_) => {
+                if self.use_hardware_encoding {
+                    // Extension point: one arm per hardware Encoder, by `video_codec`.
+                    match self.video_codec.as_str() {
+                        "hevc_nvenc" => "hevc_nvenc",
+                        "hevc_qsv" => "hevc_qsv",
+                        "hevc_vaapi" => "hevc_vaapi",
+                        "hevc_amf" => "hevc_amf",
+                        "hevc_videotoolbox" => "hevc_videotoolbox",
+                        _ => "libx265",
+                    }
+                } else {
+                    "libx265"
                 }
             }
         }
@@ -1030,6 +1073,12 @@ pub fn derive_output_path(
 
     // Use custom container or profile's default
     let container = custom_container.unwrap_or(&profile_obj.container);
+    // WebM cannot carry HEVC.
+    let container = if profile_obj.codec.is_hevc() && container == "webm" {
+        "mkv"
+    } else {
+        container
+    };
 
     // Use custom pattern (filename_pattern is now a global setting, not part of profiles)
     let filename = if let Some(pat) = custom_pattern {
@@ -1055,64 +1104,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sync_legacy_fields_av1_hardware() {
-        // Create a profile with mismatched legacy fields (simulating user's bug)
-        let mut profile = Profile {
-            name: "Test".to_string(),
-            video_codec: "libvpx-vp9".to_string(), // WRONG: VP9 encoder for AV1 codec
-            crf: 37,                               // STALE: Old value
-            hw_global_quality: 70,                 // STALE: Old value
-            use_hardware_encoding: true,
-            codec: Codec::Av1(Av1Config {
-                hw_cq: 105, // CORRECT: User's intended quality
-                preset: 8,
-                tune: 0,
-                film_grain: 0,
-                enable_overlays: true,
-                scd: true,
-                scm: 2,
-                enable_tf: true,
-                hw_preset: "4".to_string(),
-                hw_lookahead: 40,
-                hw_tile_cols: 0,
-                hw_tile_rows: 0,
-                ..Default::default()
-            }),
-            ..Profile::get("av1-qsv") // Use defaults for other fields
-        };
+    fn old_format_profile_with_top_level_hw_fields_loads_with_vp9_vaapi_defaults() {
+        let mut json = serde_json::to_value(Profile::get("vp9-good")).unwrap();
+        let obj = json.as_object_mut().unwrap();
+        // Old VP9 profiles had no VP9 VAAPI settings inside the codec config.
+        let vp9 = obj.get_mut("codec").unwrap();
+        vp9.as_object_mut()
+            .unwrap()
+            .retain(|k, _| !k.starts_with("hw_") || k.starts_with("hw_d"));
+        for (k, v) in [
+            ("hw_rc_mode", 3),
+            ("hw_global_quality", 123),
+            ("hw_b_frames", 2),
+            ("hw_loop_filter_level", 40),
+            ("hw_loop_filter_sharpness", 9),
+            ("hw_compression_level", 7),
+        ] {
+            obj.insert(k.to_string(), serde_json::json!(v));
+        }
 
-        // Apply sync
-        profile.sync_legacy_fields();
+        let profile: Profile = serde_json::from_value(json).expect("old profile loads");
 
-        // Verify sync worked
-        assert_eq!(
-            profile.hw_global_quality, 105,
-            "hw_global_quality should be synced from codec.hw_cq"
-        );
-        assert!(
-            profile.video_codec.contains("av1"),
-            "video_codec should be set to an AV1 encoder variant, got: {}",
-            profile.video_codec
-        );
-    }
-
-    #[test]
-    fn test_sync_legacy_fields_vp9_hardware() {
-        let mut profile = Profile {
-            name: "Test VP9".to_string(),
-            use_hardware_encoding: true,
-            codec: Codec::Vp9(Vp9Config {
-                hw_global_quality: 80,
-                ..Vp9Config::default()
-            }),
-            ..Profile::get("vp9-vaapi-streaming")
-        };
-
-        profile.sync_legacy_fields();
-
-        assert_eq!(
-            profile.hw_global_quality, 80,
-            "hw_global_quality should be synced from Vp9Config"
-        );
+        let vp9 = profile.codec.as_vp9().expect("VP9 codec");
+        let d = Vp9Config::default();
+        assert_eq!(vp9.hw_rc_mode, d.hw_rc_mode);
+        assert_eq!(vp9.hw_global_quality, d.hw_global_quality);
+        assert_eq!(vp9.hw_b_frames, d.hw_b_frames);
+        assert_eq!(vp9.hw_loop_filter_level, d.hw_loop_filter_level);
+        assert_eq!(vp9.hw_loop_filter_sharpness, d.hw_loop_filter_sharpness);
+        assert_eq!(vp9.hw_compression_level, d.hw_compression_level);
     }
 }

@@ -957,6 +957,309 @@ color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_p
   verification = { method = "ffmpeg-help", source = "av1_amf" }
 
 # =============================================================================
+# HEVC ENCODERS
+# One [[encoders]] block per Encoder, each in its own marked section below.
+# Parameter ids are shared across encoders by name, so every HEVC-only parameter
+# uses an encoder-prefixed id (x265-*, nvenc-*, qsv-*, ...). Only reuse an existing
+# id (crf, preset, ...) when the meaning and type match; per-encoder ranges are
+# generated automatically as range overrides.
+# =============================================================================
+
+# --- libx265 (Software Fallback) ---------------------------------------------
+
+[[encoders]]
+id = "libx265"
+codec = "hevc"
+type = "software"
+ffmpeg_name = "libx265"
+display_name = "HEVC (x265)"
+description = "HEVC software encoder (Software Fallback for HEVC); Main and Main10"
+color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_primaries ✅, color_trc ✅ (written to the VUI); HDR10 mastering display / content light level are carried from the source frames"
+
+  [[encoders.params]]
+  id = "crf"
+  scope = "private"
+  flag = "-crf"
+  type = "int"
+  range = { min = 0, max = 51 }
+  default = 28
+  description = "Constant quality (0=lossless, lower=better)"
+  verification = { method = "ffmpeg-help", date = "2026-11-08" }
+
+  [[encoders.params]]
+  id = "x265-preset"
+  scope = "private"
+  flag = "-preset"
+  type = "enum"
+  values = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+  default = "medium"
+  field_path = "x265_preset"
+  description = "Speed/efficiency preset (slower = smaller files at the same quality)"
+  verification = { method = "ffmpeg-help", date = "2026-11-08" }
+
+  [[encoders.params]]
+  id = "x265-tune"
+  scope = "private"
+  flag = "-tune"
+  type = "enum"
+  values = ["none", "psnr", "ssim", "grain", "zerolatency", "fastdecode", "animation"]
+  default = "none"
+  field_path = "x265_tune"
+  description = "Content tuning (none omits -tune)"
+  verification = { method = "ffmpeg-help", date = "2026-11-08" }
+
+  [[encoders.params]]
+  id = "x265-params"
+  scope = "private"
+  flag = "-x265-params"
+  type = "string"
+  description = "x265 parameters (key=value:key=value); ffdash sets hdr10, hdr10-opt and repeat-headers for PQ (HDR10) output"
+  verification = { method = "docs", source = "x265-docs" }
+
+# --- hevc_nvenc ----------------------------------------------------------------
+
+[[encoders]]
+id = "hevc_nvenc"
+codec = "hevc"
+type = "hardware"
+ffmpeg_name = "hevc_nvenc"
+hw_api = "nvenc"
+display_name = "HEVC (NVIDIA NVENC)"
+description = "HEVC NVIDIA NVENC (Linux and Windows); Main and Main10"
+color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_primaries ✅, color_trc ✅ (written to the VUI); HDR10 mastering display / content light level are carried from the source frames"
+
+  [[encoders.params]]
+  id = "nvenc-cq"
+  scope = "private"
+  flag = "-cq"
+  type = "int"
+  range = { min = 0, max = 51 }
+  default = 28
+  field_path = "hevc_nvenc_quality"
+  description = "Constant quality with -rc vbr (0=auto, lower=better)"
+  verification = { method = "ffmpeg-help", source = "hevc_nvenc" }
+
+  [[encoders.params]]
+  id = "nvenc-preset"
+  scope = "private"
+  flag = "-preset"
+  type = "enum"
+  values = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"]
+  default = "p4"
+  description = "Speed preset (p1=fastest/lowest, p7=slowest/best); the shared hardware preset 1-7 is inverted onto it"
+  warning = "Semantics INVERTED from QSV: p1=fastest, p7=slowest"
+  verification = { method = "ffmpeg-help", source = "hevc_nvenc" }
+
+  [[encoders.params]]
+  id = "nvenc-rc"
+  scope = "private"
+  flag = "-rc"
+  type = "enum"
+  values = ["vbr", "constqp", "cbr"]
+  default = "vbr"
+  description = "Rate control mode (ffdash uses vbr with -cq and -b:v 0 for constant quality)"
+  verification = { method = "ffmpeg-help", source = "hevc_nvenc" }
+
+  [[encoders.params]]
+  id = "nvenc-rc-lookahead"
+  scope = "private"
+  flag = "-rc-lookahead"
+  type = "int"
+  range = { min = 0, max = 32 }
+  default = 32
+  field_path = "hevc_hw_lookahead"
+  description = "Rate control lookahead frames (0=off)"
+  verification = { method = "ffmpeg-help", source = "hevc_nvenc" }
+
+  [[encoders.params]]
+  id = "nvenc-bf"
+  scope = "private"
+  flag = "-bf"
+  type = "int"
+  range = { min = 0, max = 4 }
+  default = 2
+  field_path = "hevc_hw_b_frames"
+  description = "Number of B-frames between references"
+  verification = { method = "ffmpeg-help", source = "hevc_nvenc" }
+
+# --- hevc_qsv (Intel Quick Sync, Linux and Windows) ----------------------------
+
+[[encoders]]
+id = "hevc_qsv"
+codec = "hevc"
+type = "hardware"
+ffmpeg_name = "hevc_qsv"
+hw_api = "qsv"
+display_name = "HEVC (Intel Quick Sync)"
+description = "HEVC Intel Quick Sync (Linux and Windows); Main and Main10 where the GPU supports it"
+color_metadata_notes = "Uses vpp_qsv filter options for all 4 fields (see ENCODER_REFERENCE.md#color-metadata)"
+
+  [[encoders.params]]
+  id = "qsv-quality"
+  scope = "private"
+  flag = "-q:v"
+  type = "int"
+  range = { min = 1, max = 51 }
+  default = 26
+  field_path = "qsv_quality"
+  description = "Constant quality (CQP; lower=better)"
+  verification = { method = "ffmpeg-help", source = "hevc_qsv" }
+
+  [[encoders.params]]
+  id = "qsv-preset"
+  scope = "private"
+  flag = "-preset"
+  type = "enum"
+  values = ["1", "2", "3", "4", "5", "6", "7"]
+  default = "4"
+  field_path = "hevc_hw_preset"
+  description = "Speed preset (1=veryslow .. 7=veryfast; sent as the QSV preset name)"
+  verification = { method = "ffmpeg-help", source = "hevc_qsv" }
+
+  [[encoders.params]]
+  id = "qsv-look-ahead-depth"
+  scope = "private"
+  flag = "-look_ahead_depth"
+  type = "int"
+  range = { min = 0, max = 100 }
+  default = 40
+  field_path = "hevc_hw_lookahead"
+  description = "Lookahead depth in frames (0=off)"
+  verification = { method = "ffmpeg-help", source = "hevc_qsv" }
+
+  [[encoders.params]]
+  id = "qsv-b-frames"
+  scope = "private"
+  flag = "-bf"
+  type = "int"
+  range = { min = 0, max = 16 }
+  default = 2
+  field_path = "hevc_hw_b_frames"
+  description = "Maximum number of B-frames"
+  verification = { method = "ffmpeg-help", source = "hevc_qsv" }
+
+  [[encoders.params]]
+  id = "qsv-rc-mode"
+  scope = "private"
+  flag = "-q:v"
+  type = "enum"
+  values = ["cq"]
+  default = "cq"
+  field_path = "hevc_hw_rc_mode"
+  description = "Rate control: constant quality only (CQP, selected by -q:v)"
+  verification = { method = "ffmpeg-help", source = "hevc_qsv" }
+
+# --- hevc_vaapi (VAAPI, Linux) -------------------------------------------------
+
+[[encoders]]
+id = "hevc_vaapi"
+codec = "hevc"
+type = "hardware"
+ffmpeg_name = "hevc_vaapi"
+hw_api = "vaapi"
+display_name = "HEVC (VAAPI / Intel & AMD)"
+description = "HEVC VAAPI hardware encoder (Linux); Main and Main10, constant quality only. No preset or lookahead control."
+color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_primaries ✅, color_trc ✅"
+
+  [[encoders.params]]
+  id = "vaapi-rc-mode"
+  scope = "private"
+  flag = "-rc_mode:v"
+  type = "enum"
+  values = ["CQP"]
+  default = "CQP"
+  description = "Rate control mode (ffdash always uses constant quality)"
+  verification = { method = "docs", source = "ffmpeg-vaapi-encoders" }
+
+  [[encoders.params]]
+  id = "vaapi-qp"
+  scope = "private"
+  flag = "-global_quality:v"
+  type = "int"
+  range = { min = 1, max = 51 }
+  default = 26
+  field_path = "vaapi_quality"
+  description = "Constant QP (1=best/largest, 51=worst/smallest)"
+  verification = { method = "docs", source = "ffmpeg-vaapi-encoders" }
+
+  [[encoders.params]]
+  id = "vaapi-bf"
+  scope = "private"
+  flag = "-bf:v"
+  type = "int"
+  range = { min = 0, max = 4 }
+  default = 2
+  field_path = "hw_b_frames"
+  description = "Maximum B-frames between non-B frames (driver support varies)"
+  verification = { method = "docs", source = "ffmpeg-vaapi-encoders" }
+
+# --- hevc_amf ------------------------------------------------------------------
+
+[[encoders]]
+id = "hevc_amf"
+codec = "hevc"
+type = "hardware"
+ffmpeg_name = "hevc_amf"
+hw_api = "amf"
+display_name = "HEVC (AMD AMF)"
+description = "AMD Advanced Media Framework HEVC encoder (CPU-decoded input; no B-frames or lookahead)"
+color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_primaries ✅, color_trc ✅ (VUI); no HDR10 mastering display / content light level SEI"
+
+  [[encoders.params]]
+  id = "amf-qp"
+  scope = "private"
+  flag = "-qp_i"
+  type = "int"
+  range = { min = 0, max = 51 }
+  default = 26
+  field_path = "amf_qp"
+  description = "Constant QP for I and P frames (lower=better); ffdash sets -qp_i and -qp_p together"
+  verification = { method = "ffmpeg-help", source = "hevc_amf" }
+
+  [[encoders.params]]
+  id = "amf-rc"
+  scope = "private"
+  flag = "-rc"
+  type = "enum"
+  values = ["cqp"]
+  default = "cqp"
+  description = "Rate control (ffdash uses constant QP only)"
+  verification = { method = "ffmpeg-help", source = "hevc_amf" }
+
+  [[encoders.params]]
+  id = "amf-quality"
+  scope = "private"
+  flag = "-quality"
+  type = "enum"
+  values = ["speed", "balanced", "quality"]
+  default = "balanced"
+  description = "Speed/quality preset (from the shared hardware preset: 1-2 quality, 3-5 balanced, 6-7 speed)"
+  verification = { method = "ffmpeg-help", source = "hevc_amf" }
+
+# --- hevc_videotoolbox ---------------------------------------------------------
+
+[[encoders]]
+id = "hevc_videotoolbox"
+codec = "hevc"
+type = "hardware"
+ffmpeg_name = "hevc_videotoolbox"
+hw_api = "videotoolbox"
+display_name = "HEVC (Apple VideoToolbox)"
+description = "Apple VideoToolbox HEVC encoder (macOS; CPU-decoded input; Apple Silicon only for constant quality)"
+color_metadata_notes = "Standard flags: colorspace ✅, color_range ✅, color_primaries ✅, color_trc ✅"
+
+  [[encoders.params]]
+  id = "videotoolbox-q"
+  scope = "private"
+  flag = "-q:v"
+  type = "int"
+  range = { min = 1, max = 100 }
+  default = 60
+  field_path = "videotoolbox_q"
+  description = "Constant quality (1-100, HIGHER=better; the reverse of CRF/QP)"
+  verification = { method = "ffmpeg-help", source = "hevc_videotoolbox" }
+
+# =============================================================================
 # Verification Source Map
 # =============================================================================
 [sources]
@@ -967,3 +1270,10 @@ av1_qsv = "ffmpeg -h encoder=av1_qsv"
 av1_nvenc = "ffmpeg -h encoder=av1_nvenc"
 av1_amf = "ffmpeg -h encoder=av1_amf"
 svt-av1-guide = "SVT-AV1 encoder guide"
+x265-docs = "x265 command line options documentation"
+libx265 = "ffmpeg -h encoder=libx265"
+hevc_nvenc = "ffmpeg -h encoder=hevc_nvenc"
+hevc_qsv = "ffmpeg -h encoder=hevc_qsv"
+hevc_vaapi = "ffmpeg -h encoder=hevc_vaapi"
+hevc_amf = "ffmpeg -h encoder=hevc_amf"
+hevc_videotoolbox = "ffmpeg -h encoder=hevc_videotoolbox"

@@ -1,9 +1,7 @@
 #![allow(dead_code)] // Spare tools for the next regression meteor shower
 
-use ffdash::engine::{
-    HwEncodingConfig, Profile, VideoJob, build_av1_nvenc_cmd, build_av1_qsv_cmd,
-    build_av1_software_cmd, build_av1_vaapi_cmd, build_ffmpeg_cmd_with_profile, build_vaapi_cmd,
-};
+use ffdash::engine::hardware::VideoEncoder;
+use ffdash::engine::{Codec, EncodePlan, Profile, VideoJob, build_encode_cmds};
 use ffdash::ui::state::{ConfigState, RateControlMode};
 use std::path::PathBuf;
 use std::process::Command;
@@ -311,6 +309,13 @@ pub fn config_to_profile(config: &ConfigState, name: &str) -> Profile {
     Profile::from_config(name.to_string(), config)
 }
 
+/// Build the (last) command for `encoder` through the public entry point.
+fn build_one(job: &VideoJob, profile: &Profile, encoder: VideoEncoder) -> Command {
+    build_encode_cmds(job, profile, &EncodePlan::new(encoder))
+        .pop()
+        .expect("entry point returns at least one command")
+}
+
 /// Build a software (libvpx-vp9) command using the ACTUAL engine code
 /// This ensures tests verify the real implementation, not duplicated logic
 pub fn build_software_cmd_for_test(profile: &Profile) -> String {
@@ -320,33 +325,66 @@ pub fn build_software_cmd_for_test(profile: &Profile) -> String {
         profile.name.clone(),
     );
 
-    // Call actual build function with hw_config=None for software encoding
-    let cmd = build_ffmpeg_cmd_with_profile(&job, None, Some(profile));
-    cmd_to_string(&cmd)
+    // Go through the single entry point with the software Encoder selected
+    cmd_to_string(&build_one(&job, profile, VideoEncoder::LibvpxVp9))
+}
+
+/// VP9 VAAPI settings (the VP9 codec config's `hw_*` fields) for building test commands
+#[derive(Debug, Clone)]
+pub struct Vp9VaapiSettings {
+    pub rc_mode: u32,
+    pub global_quality: u32,
+    pub b_frames: u32,
+    pub loop_filter_level: u32,
+    pub loop_filter_sharpness: u32,
+    pub compression_level: u32,
+}
+
+impl Default for Vp9VaapiSettings {
+    fn default() -> Self {
+        Self {
+            rc_mode: 4,
+            global_quality: 70,
+            b_frames: 0,
+            loop_filter_level: 16,
+            loop_filter_sharpness: 4,
+            compression_level: 4,
+        }
+    }
 }
 
 /// Build a VAAPI hardware command using the ACTUAL engine code
 /// This ensures tests verify the real implementation, not duplicated logic
-pub fn build_vaapi_cmd_for_test(profile: &Profile, hw_config: &HwEncodingConfig) -> String {
+pub fn build_vaapi_cmd_for_test(profile: &Profile, settings: &Vp9VaapiSettings) -> String {
     let job = VideoJob::new(
         PathBuf::from("test_input.mp4"),
         PathBuf::from("test_output.webm"),
         profile.name.clone(),
     );
 
-    // Call the explicit VAAPI builder to avoid depending on runtime encoder auto-selection.
-    let cmd = build_vaapi_cmd(&job, profile, hw_config);
-    cmd_to_string(&cmd)
+    // Express the hardware settings in the VP9 codec config (ADR 0002), then plan VP9 VAAPI
+    // explicitly so the test does not depend on runtime encoder auto-selection.
+    let mut profile = profile.clone();
+    profile.use_hardware_encoding = true;
+    if let Codec::Vp9(vp9) = &mut profile.codec {
+        vp9.hw_rc_mode = settings.rc_mode;
+        vp9.hw_global_quality = settings.global_quality;
+        vp9.hw_b_frames = settings.b_frames;
+        vp9.hw_loop_filter_level = settings.loop_filter_level;
+        vp9.hw_loop_filter_sharpness = settings.loop_filter_sharpness;
+        vp9.hw_compression_level = settings.compression_level;
+    }
+    cmd_to_string(&build_one(&job, &profile, VideoEncoder::Vp9Vaapi))
 }
 
-/// Create a default HwEncodingConfig for testing
-pub fn default_hw_config() -> HwEncodingConfig {
-    HwEncodingConfig::default()
+/// Create a default Vp9VaapiSettings for testing
+pub fn default_vaapi_settings() -> Vp9VaapiSettings {
+    Vp9VaapiSettings::default()
 }
 
-/// Create a custom HwEncodingConfig for testing
-pub fn custom_hw_config(quality: u32, b_frames: u32) -> HwEncodingConfig {
-    HwEncodingConfig {
+/// Create a custom Vp9VaapiSettings for testing
+pub fn custom_vaapi_settings(quality: u32, b_frames: u32) -> Vp9VaapiSettings {
+    Vp9VaapiSettings {
         rc_mode: 4, // ICQ (Intelligent Constant Quality) - default
         global_quality: quality,
         b_frames,
@@ -363,7 +401,7 @@ pub fn build_av1_software_cmd_for_test(profile: &Profile) -> String {
         PathBuf::from("test_output.mkv"),
         profile.name.clone(),
     );
-    cmd_to_string(&build_av1_software_cmd(&job, profile))
+    cmd_to_string(&build_one(&job, profile, VideoEncoder::LibsvtAv1))
 }
 
 /// Build AV1 QSV command using real builder
@@ -373,7 +411,7 @@ pub fn build_av1_qsv_cmd_for_test(profile: &Profile) -> String {
         PathBuf::from("test_output.mkv"),
         profile.name.clone(),
     );
-    cmd_to_string(&build_av1_qsv_cmd(&job, profile))
+    cmd_to_string(&build_one(&job, profile, VideoEncoder::Av1Qsv))
 }
 
 /// Build AV1 NVENC command using real builder
@@ -383,7 +421,7 @@ pub fn build_av1_nvenc_cmd_for_test(profile: &Profile) -> String {
         PathBuf::from("test_output.mkv"),
         profile.name.clone(),
     );
-    cmd_to_string(&build_av1_nvenc_cmd(&job, profile))
+    cmd_to_string(&build_one(&job, profile, VideoEncoder::Av1Nvenc))
 }
 
 /// Build AV1 VAAPI command using real builder
@@ -393,5 +431,5 @@ pub fn build_av1_vaapi_cmd_for_test(profile: &Profile) -> String {
         PathBuf::from("test_output.mkv"),
         profile.name.clone(),
     );
-    cmd_to_string(&build_av1_vaapi_cmd(&job, profile))
+    cmd_to_string(&build_one(&job, profile, VideoEncoder::Av1Vaapi))
 }
