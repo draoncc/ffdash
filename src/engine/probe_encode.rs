@@ -130,6 +130,82 @@ pub fn probe_args(
     Some(a)
 }
 
+/// FFmpeg arguments for a Dolby Vision Probe Encode of `encoder`: a few 10-bit
+/// PQ/BT.2020 frames encoded with `-dolbyvision 1`. `None` for Encoders that
+/// cannot carry Dolby Vision at all (every Hardware Encoder, VP9, libaom).
+///
+/// libx265 is encoded to a null output (success of the encode is the signal; it
+/// needs VBV settings for Dolby Vision HRD). libsvtav1 writes `output`, which
+/// [`run_dolby_vision_probe`] then checks with ffprobe, because an AV1 encode can
+/// succeed without producing a real Dolby Vision stream.
+pub fn dolby_vision_probe_args(encoder: VideoEncoder, output: &str) -> Option<Vec<String>> {
+    let mut a: Vec<String> = Vec::new();
+    let mut push = |items: &[&str]| a.extend(items.iter().map(|s| s.to_string()));
+    push(&["-hide_banner", "-loglevel", "error", "-nostdin"]);
+    push(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=640x360:rate=30",
+        "-frames:v",
+        "5",
+        "-pix_fmt",
+        "yuv420p10le",
+        "-color_primaries",
+        "bt2020",
+        "-color_trc",
+        "smpte2084",
+        "-colorspace",
+        "bt2020nc",
+        "-c:v",
+    ]);
+    match encoder {
+        VideoEncoder::Libx265 => {
+            push(&[
+                "libx265",
+                "-x265-params",
+                "log-level=error:vbv-bufsize=20000:vbv-maxrate=20000:hrd=1:aud=1:repeat-headers=1",
+                "-dolbyvision",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ]);
+        }
+        VideoEncoder::LibsvtAv1 => {
+            push(&["libsvtav1", "-dolbyvision", "1", "-y", output]);
+        }
+        _ => return None,
+    }
+    Some(a)
+}
+
+/// The Dolby Vision Profile ffprobe must report for the probe output, when the
+/// encode alone is not proof. Only AV1 (Profile 10) is checked.
+pub fn dolby_vision_probe_expected_profile(encoder: VideoEncoder) -> Option<u8> {
+    match encoder {
+        VideoEncoder::LibsvtAv1 => Some(10),
+        _ => None,
+    }
+}
+
+/// Whether ffprobe JSON (`-show_streams -of json`) reports a Dolby Vision
+/// configuration record of `profile` on a stream.
+pub fn reports_dolby_vision_profile(ffprobe_json: &str, profile: u8) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(ffprobe_json) else {
+        return false;
+    };
+    v["streams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|s| s["side_data_list"].as_array().into_iter().flatten())
+        .any(|sd| {
+            sd["side_data_type"].as_str() == Some("DOVI configuration record")
+                && sd["dv_profile"].as_u64() == Some(u64::from(profile))
+        })
+}
+
 /// Run one Probe Encode on this machine. True if FFmpeg exits successfully in time.
 fn run_probe(encoder: VideoEncoder, bit_depth: u8) -> bool {
     let render_device = hardware::detect_render_device();
@@ -147,6 +223,48 @@ fn run_probe(encoder: VideoEncoder, bit_depth: u8) -> bool {
         cmd.env("LIBVA_DRIVERS_PATH", &cfg.driver.path);
         cmd.env("LIBVA_DRIVER_NAME", &cfg.driver.name);
     }
+    run_with_timeout(cmd)
+}
+
+/// Run one Dolby Vision Probe Encode. True if the encode succeeds and, where
+/// required, ffprobe reports the expected Dolby Vision Profile on the output.
+fn run_dolby_vision_probe(encoder: VideoEncoder) -> bool {
+    let out = std::env::temp_dir().join(format!(
+        "ffdash_dv_probe_{}_{}.mkv",
+        std::process::id(),
+        encoder.ffmpeg_name()
+    ));
+    let Some(args) = out
+        .to_str()
+        .and_then(|o| dolby_vision_probe_args(encoder, o))
+    else {
+        return false;
+    };
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut ok = run_with_timeout(cmd);
+    if ok && let Some(profile) = dolby_vision_probe_expected_profile(encoder) {
+        ok = Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_streams"])
+            .args(["-of", "json"])
+            .arg(&out)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| {
+                o.status.success()
+                    && reports_dolby_vision_profile(&String::from_utf8_lossy(&o.stdout), profile)
+            });
+    }
+    let _ = std::fs::remove_file(&out);
+    ok
+}
+
+/// Spawn `cmd` and wait for it; false on spawn failure, non-zero exit or timeout.
+fn run_with_timeout(mut cmd: Command) -> bool {
     let Ok(mut child) = cmd.spawn() else {
         return false;
     };
@@ -198,7 +316,36 @@ pub fn probe_availability(listing: &str) -> EncoderAvailability {
             availability = availability.with(e, main10);
         }
     }
+    let dv_capable: Vec<VideoEncoder> = std::thread::scope(|s| {
+        let handles: Vec<_> = dolby_vision_candidates(&availability)
+            .into_iter()
+            .map(|e| s.spawn(move || (e, run_dolby_vision_probe(e))))
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .filter_map(|(e, ok)| ok.then_some(e))
+            .collect()
+    });
+    for e in dv_capable {
+        availability = availability.with_dolby_vision(e);
+    }
     availability
+}
+
+/// The Encoders that get a Dolby Vision Probe Encode: only those that already
+/// passed the normal probe (are in `availability`) and have a Dolby Vision probe.
+pub fn dolby_vision_candidates(availability: &EncoderAvailability) -> Vec<VideoEncoder> {
+    CodecKind::ALL
+        .iter()
+        .flat_map(|c| {
+            c.hardware_priority()
+                .iter()
+                .copied()
+                .chain([c.software_fallback()])
+        })
+        .filter(|e| availability.is_available(*e) && dolby_vision_probe_args(*e, "").is_some())
+        .collect()
 }
 
 #[cfg(test)]
@@ -316,5 +463,82 @@ mod tests {
         assert!(lists_encoder(listing, "libsvtav1"));
         assert!(!lists_encoder(listing, "av1_qsv"));
         assert!(!lists_encoder(listing, "av1"));
+    }
+
+    #[test]
+    fn dolby_vision_is_probed_only_for_encoders_that_passed_the_normal_probe() {
+        let none = EncoderAvailability::default();
+        assert!(dolby_vision_candidates(&none).is_empty());
+        let a = EncoderAvailability::default()
+            .with(Libx265, true)
+            .with(HevcNvenc, true);
+        assert_eq!(dolby_vision_candidates(&a), vec![Libx265]);
+        let both = a.with(LibsvtAv1, true);
+        assert_eq!(dolby_vision_candidates(&both), vec![LibsvtAv1, Libx265]);
+    }
+
+    fn dv_joined(e: VideoEncoder) -> String {
+        dolby_vision_probe_args(e, "probe.mkv").unwrap().join(" ")
+    }
+
+    #[test]
+    fn only_software_dolby_vision_encoders_have_a_dolby_vision_probe() {
+        assert!(dolby_vision_probe_args(Libx265, "p.mkv").is_some());
+        assert!(dolby_vision_probe_args(LibsvtAv1, "p.mkv").is_some());
+        for e in hardware_candidates() {
+            assert!(dolby_vision_probe_args(e, "p.mkv").is_none(), "{e:?}");
+        }
+        assert!(dolby_vision_probe_args(LibvpxVp9, "p.mkv").is_none());
+        assert!(dolby_vision_probe_args(LibaomAv1, "p.mkv").is_none());
+    }
+
+    #[test]
+    fn dolby_vision_probe_is_a_few_frame_ten_bit_pq_encode_with_dolbyvision() {
+        for e in [Libx265, LibsvtAv1] {
+            let s = dv_joined(e);
+            assert!(s.contains("-f lavfi -i testsrc="), "{e:?}");
+            assert!(s.contains("-frames:v 5"), "{e:?}");
+            assert!(s.contains("-pix_fmt yuv420p10le"), "{e:?}");
+            assert!(s.contains("-color_primaries bt2020"), "{e:?}");
+            assert!(s.contains("-color_trc smpte2084"), "{e:?}");
+            assert!(s.contains("-colorspace bt2020nc"), "{e:?}");
+            assert!(s.contains("-dolbyvision 1"), "{e:?}");
+            assert!(s.contains(&format!("-c:v {}", e.ffmpeg_name())), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn x265_dolby_vision_probe_sets_vbv_and_discards_output() {
+        let s = dv_joined(Libx265);
+        assert!(s.contains("vbv-bufsize=") && s.contains("vbv-maxrate="));
+        assert!(s.ends_with("-f null -"));
+    }
+
+    #[test]
+    fn av1_dolby_vision_probe_writes_the_given_file_for_ffprobe() {
+        let s = dv_joined(LibsvtAv1);
+        assert!(s.ends_with("-y probe.mkv"));
+        assert_eq!(dolby_vision_probe_expected_profile(LibsvtAv1), Some(10));
+        assert_eq!(dolby_vision_probe_expected_profile(Libx265), None);
+    }
+
+    #[test]
+    fn ffprobe_json_with_dolby_vision_profile_10_is_recognised() {
+        let json = r#"{"streams":[{"codec_name":"av1","side_data_list":[
+            {"side_data_type":"DOVI configuration record","dv_profile":10,
+             "dv_bl_signal_compatibility_id":0}]}]}"#;
+        assert!(reports_dolby_vision_profile(json, 10));
+        assert!(!reports_dolby_vision_profile(json, 8));
+    }
+
+    #[test]
+    fn ffprobe_json_without_dolby_vision_is_not_recognised() {
+        let plain = r#"{"streams":[{"codec_name":"av1"}]}"#;
+        assert!(!reports_dolby_vision_profile(plain, 10));
+        let other_side_data = r#"{"streams":[{"side_data_list":[
+            {"side_data_type":"Mastering display metadata"}]}]}"#;
+        assert!(!reports_dolby_vision_profile(other_side_data, 10));
+        assert!(!reports_dolby_vision_profile("not json", 10));
+        assert!(!reports_dolby_vision_profile(r#"{"streams":[]}"#, 10));
     }
 }
