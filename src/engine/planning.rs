@@ -47,11 +47,11 @@ pub fn plan_job(req: &PlanRequest) -> JobPlan {
 }
 
 /// A Dolby Vision source is preserved or skipped with a reason, never downgraded
-/// (ADR 0003). Only HEVC in MKV with Profile 5, 8.1 or 8.4 is preserved so far; the
+/// (ADR 0003). Only HEVC in MKV or MP4 with Profile 5, 8.1 or 8.4 is preserved so far; the
 /// other cases are skipped until their tickets land.
 fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan {
     let preservable = req.codec == CodecKind::Hevc
-        && req.container == "mkv"
+        && matches!(req.container, "mkv" | "mp4")
         && matches!(
             profile,
             DolbyVisionProfile::P5 | DolbyVisionProfile::P8_1 | DolbyVisionProfile::P8_4
@@ -240,13 +240,47 @@ mod tests {
                 not_yet(profile, CodecKind::Av1, container);
                 not_yet(profile, CodecKind::Vp9, container);
             }
-            // HEVC in MP4 / WebM
-            not_yet(profile, CodecKind::Hevc, "mp4");
+            // HEVC in WebM
             not_yet(profile, CodecKind::Hevc, "webm");
         }
-        // Profile 7 and other profiles in MKV HEVC
-        not_yet(DolbyVisionProfile::P7, CodecKind::Hevc, "mkv");
-        not_yet(ALL_PROFILES[4], CodecKind::Hevc, "mkv");
+        // Profile 7 and other profiles in MKV and MP4 HEVC
+        for container in ["mkv", "mp4"] {
+            not_yet(DolbyVisionProfile::P7, CodecKind::Hevc, container);
+            not_yet(ALL_PROFILES[4], CodecKind::Hevc, container);
+        }
+    }
+
+    #[test]
+    fn hevc_mp4_preserves_profiles_5_8_1_and_8_4_on_libx265() {
+        let avail = dv_availability();
+        for profile in [
+            DolbyVisionProfile::P5,
+            DolbyVisionProfile::P8_1,
+            DolbyVisionProfile::P8_4,
+        ] {
+            let plan = plan_job(&request(CodecKind::Hevc, "mp4", Some(profile), &avail));
+            assert_eq!(
+                plan,
+                JobPlan::Encode(EncodePlan::new(Libx265).with_dolby_vision(profile)),
+                "{profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn hevc_mp4_without_a_dolby_vision_capable_encoder_skips_like_mkv() {
+        let avail = availability();
+        for profile in [
+            DolbyVisionProfile::P5,
+            DolbyVisionProfile::P8_1,
+            DolbyVisionProfile::P8_4,
+        ] {
+            let plan = plan_job(&request(CodecKind::Hevc, "mp4", Some(profile), &avail));
+            let JobPlan::Skip(reason) = plan else {
+                panic!("expected a skip for {profile}");
+            };
+            assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
+        }
     }
 
     #[test]

@@ -90,7 +90,7 @@ pub(super) fn build(job: &VideoJob, profile: &Profile, cpu_decode: bool) -> Comm
     cmd.arg("-g:v").arg(&profile.gop_length);
 
     apply_color_metadata(&mut cmd, profile);
-    apply_hevc_container_tag(&mut cmd, job, profile);
+    apply_hevc_container_tag(&mut cmd, job, profile, None);
 
     let container = container_from_output(job, profile);
     apply_audio_settings(&mut cmd, profile, &container);

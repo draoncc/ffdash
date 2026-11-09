@@ -192,6 +192,26 @@ fn snapshot_hevc_x265_dolby_vision_profiles_in_mkv() {
 }
 
 #[test]
+fn snapshot_hevc_x265_dolby_vision_profiles_in_mp4() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mp4");
+    // Profiles 8.1 / 8.4 keep the HDR10/HLG fallback readable by non-Dolby-Vision
+    // Apple players (hvc1); Profile 5 has no fallback and is tagged dvh1.
+    for (name, dv, tag) in [
+        ("p5", Dv::P5, "dvh1"),
+        ("p8_1", Dv::P8_1, "hvc1"),
+        ("p8_4", Dv::P8_4, "hvc1"),
+    ] {
+        let out = build_dolby_vision(&job, &profile, dv);
+        assert!(out.contains("-dolbyvision 1"), "{out}");
+        assert!(out.contains(&format!("-tag:v {tag}")), "{out}");
+        assert_eq!(out.matches("-tag:v").count(), 1, "{out}");
+        assert_snapshot!(format!("hevc_x265_dolby_vision_{name}_mp4"), out);
+    }
+}
+
+#[test]
 fn snapshot_mp4_output_never_maps_attachments_or_copies_subtitles() {
     // Profiles written for MKV map `0:s?`/`0:t?` and copy them; MP4 cannot hold those.
     // The input does not exist, so no text subtitles are probed and subtitles are dropped.

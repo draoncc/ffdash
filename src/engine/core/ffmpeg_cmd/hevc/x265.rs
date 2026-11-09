@@ -77,7 +77,7 @@ pub(super) fn build(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
     }
 
     apply_color_metadata(&mut cmd, profile);
-    apply_hevc_container_tag(&mut cmd, job, profile);
+    apply_hevc_container_tag(&mut cmd, job, profile, plan.dolby_vision);
 
     // Video filters (fps, scale, HDR->SDR tonemap)
     let mut filters = Vec::new();

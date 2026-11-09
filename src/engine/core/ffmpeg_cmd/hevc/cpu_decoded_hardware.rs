@@ -51,7 +51,7 @@ pub(super) fn build(
     cmd.arg("-g:v").arg(&profile.gop_length);
 
     apply_color_metadata(&mut cmd, profile);
-    apply_hevc_container_tag(&mut cmd, job, profile);
+    apply_hevc_container_tag(&mut cmd, job, profile, None);
 
     // Video filters (fps, scale)
     let mut filters = Vec::new();

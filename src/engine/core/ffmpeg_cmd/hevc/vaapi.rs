@@ -101,7 +101,7 @@ pub(super) fn build(job: &VideoJob, profile: &Profile) -> Command {
     cmd.arg("-g:v").arg(&profile.gop_length);
 
     apply_color_metadata(&mut cmd, profile);
-    apply_hevc_container_tag(&mut cmd, job, profile);
+    apply_hevc_container_tag(&mut cmd, job, profile, None);
 
     apply_audio_settings(&mut cmd, profile, &container);
     apply_job_additional_args(&mut cmd, job, profile);

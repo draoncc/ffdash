@@ -12,6 +12,7 @@ use super::super::encode_plan::EncodePlan;
 use super::super::profile::Profile;
 use super::super::types::VideoJob;
 use super::container_from_output;
+use crate::engine::dolby_vision::DolbyVisionProfile;
 use crate::engine::hardware::VideoEncoder;
 
 mod amf;
@@ -50,12 +51,25 @@ pub(super) fn build_hevc_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePla
 }
 
 /// MP4 output always carries `-tag:v hvc1` (QuickTime and Apple players need it).
+/// Dolby Vision Profile 5 is the exception: it has no HDR10/HLG fallback, so it is
+/// tagged `dvh1` to mark it as Dolby Vision-only. Profiles 8.1 and 8.4 stay `hvc1`
+/// so non-Dolby-Vision players still open them through the fallback.
 /// Shared by every HEVC Encoder; call it once per command.
-pub(super) fn apply_hevc_container_tag(cmd: &mut Command, job: &VideoJob, profile: &Profile) {
+pub(super) fn apply_hevc_container_tag(
+    cmd: &mut Command,
+    job: &VideoJob,
+    profile: &Profile,
+    dolby_vision: Option<DolbyVisionProfile>,
+) {
     if matches!(
         container_from_output(job, profile).as_str(),
         "mp4" | "m4v" | "mov"
     ) {
-        cmd.arg("-tag:v").arg("hvc1");
+        let tag = if dolby_vision == Some(DolbyVisionProfile::P5) {
+            "dvh1"
+        } else {
+            "hvc1"
+        };
+        cmd.arg("-tag:v").arg(tag);
     }
 }

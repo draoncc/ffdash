@@ -126,7 +126,7 @@ pub(super) fn build(job: &VideoJob, profile: &Profile, cpu_decode: bool) -> Comm
         cmd.arg("-pix_fmt").arg(pix_fmt);
     }
 
-    apply_hevc_container_tag(&mut cmd, job, profile);
+    apply_hevc_container_tag(&mut cmd, job, profile, None);
 
     let container = container_from_output(job, profile);
     apply_audio_settings(&mut cmd, profile, &container);
