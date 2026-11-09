@@ -23,12 +23,20 @@ struct Case {
     expected_profile: &'static str,
 }
 
-const CASES: &[Case] = &[Case {
-    env_var: "FFDASH_DV_SAMPLE_HEVC_MKV_P81",
-    profile: "hevc-x265",
-    container: "mkv",
-    expected_profile: "8.1",
-}];
+const CASES: &[Case] = &[
+    Case {
+        env_var: "FFDASH_DV_SAMPLE_HEVC_MKV_P81",
+        profile: "hevc-x265",
+        container: "mkv",
+        expected_profile: "8.1",
+    },
+    Case {
+        env_var: "FFDASH_DV_SAMPLE_HEVC_MP4_P81",
+        profile: "hevc-x265",
+        container: "mp4",
+        expected_profile: "8.1",
+    },
+];
 
 /// The sample path a case's environment variable names, if it names one.
 fn sample_path(var: &str) -> Option<PathBuf> {
