@@ -88,13 +88,14 @@ Pick **HEVC** in the Video Codec dropdown (or the built-in `hevc-x265` profile) 
 
 There are no Dolby Vision settings: a source with Dolby Vision is always preserved or skipped, never downgraded to plain HDR10 or HLG.
 
-- **Preserved**: HEVC to MKV or MP4 (MP4 is tagged `dvh1` for Profile 5, `hvc1` otherwise) and AV1 to MKV or MP4 (as Dolby Vision Profile 10). Profiles 5, 8.1 and 8.4 are kept as they are; Profile 7 is first converted to 8.1 with `dovi_tool`.
+- **Preserved**: HEVC to MKV or MP4 (MP4 is tagged `dvh1` for Profile 5, `hvc1` otherwise) and AV1 to MKV (as Dolby Vision Profile 10; AV1 in MP4 is skipped). Profiles 5, 8.1 and 8.4 are kept as they are; Profile 7 is first converted to 8.1 with `dovi_tool`.
 - **Encoder**: hardware Encoders can't carry Dolby Vision, so these jobs use the Software Fallback (`libx265` or `libsvtav1`) at 10-bit, whatever the Hardware Encoding, Bit Depth and preferred Encoder settings say. Preset, CRF and the other software settings apply as usual, and Auto-VMAF keeps the Dolby Vision.
 - **Capability check**: whether FFmpeg can encode Dolby Vision is probed lazily, on the first Dolby Vision source of the session, and cached.
 - **Skipped** (the reason is shown in the dashboard):
   - `WebM can't carry Dolby Vision`: pick MKV or MP4.
   - `VP9 can't carry Dolby Vision`: pick HEVC or AV1.
-  - `Dolby Vision Profile <profile> not supported yet`: only Profiles 5, 7, 8.1 and 8.4 are handled.
+  - `MP4 can't carry Dolby Vision AV1 yet; use MKV`: Dolby Vision AV1 is only written to MKV for now.
+  - `Dolby Vision Profile <profile> isn't supported`: only Profiles 5, 7, 8.1 and 8.4 are handled.
   - `install dovi_tool to convert Dolby Vision Profile 7`: Profile 7 needs `dovi_tool` on your `PATH`.
   - `Your FFmpeg can't encode Dolby Vision; upgrade FFmpeg to keep Dolby Vision`: the software Encoder in your FFmpeg did not pass the Dolby Vision Probe Encode.
 

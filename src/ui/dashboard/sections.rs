@@ -900,13 +900,13 @@ mod tests {
             "/a/dv.out.mkv".into(),
             "p".into(),
         );
-        skipped.skip("Dolby Vision Profile 8.1 not supported yet");
+        skipped.skip("Dolby Vision Profile 8.1 isn't supported");
         let plain = VideoJob::new("/a/plain.mkv".into(), "/a/plain.out.mkv".into(), "p".into());
 
         let text = render_jobs_text(vec![skipped, plain]);
         assert!(text.contains("Skipped"), "{text}");
         assert!(
-            text.contains("Dolby Vision Profile 8.1 not supported yet"),
+            text.contains("Dolby Vision Profile 8.1 isn't supported"),
             "{text}"
         );
     }
