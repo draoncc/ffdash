@@ -51,6 +51,7 @@ Every commit follows [Conventional Commits 1.0](https://www.conventionalcommits.
 
 - **Rebase, don't merge.** Update your branch with `git pull --rebase` or `git rebase origin/main`, never `git merge main`.
 - **Clean up before review.** Squash fixups (`git rebase -i`, `git commit --fixup` + `--autosquash`) so each remaining commit is a self-contained Conventional Commit that builds and passes tests.
+- **Check every commit before review** with `make check-commits`, which runs the CI checks on each commit since `main`. For a branch stacked on another, pass `BASE=<that branch>`.
 - **Force-push your own branch only**, with `git push --force-with-lease`. Never force-push `main`.
 - **PRs land by rebase or squash merge.** Multi-commit PRs whose commits are each meaningful are rebased; otherwise the PR is squashed into one commit whose message follows the format above.
 
