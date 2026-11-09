@@ -2,6 +2,7 @@
 
 pub mod core;
 pub mod dolby_vision;
+pub mod dovi_tool;
 pub mod hardware;
 pub mod planning;
 pub mod probe;

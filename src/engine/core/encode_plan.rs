@@ -18,6 +18,9 @@ pub struct EncodePlan {
     pub host: HostPlatform,
     /// The Dolby Vision Profile the output carries; none for non-Dolby-Vision jobs.
     pub dolby_vision: Option<DolbyVisionProfile>,
+    /// The source is Dolby Vision Profile 7: a Dolby Vision Conversion to 8.1 runs
+    /// before the encode, which then reads the converted stream.
+    pub dolby_vision_conversion: bool,
 }
 
 /// The operating system a command is built for. An explicit input to command building
@@ -55,6 +58,7 @@ impl EncodePlan {
             quality_override: None,
             host: HostPlatform::current(),
             dolby_vision: None,
+            dolby_vision_conversion: false,
         }
     }
 
@@ -64,10 +68,17 @@ impl EncodePlan {
         self
     }
 
+    /// The source needs a Dolby Vision Conversion to Profile 8.1 before the encode.
+    pub fn with_dolby_vision_conversion(mut self) -> Self {
+        self.dolby_vision_conversion = true;
+        self
+    }
+
     /// The same plan without Dolby Vision (for Auto-VMAF calibration windows, which
     /// only measure quality and never need the metadata).
     pub fn without_dolby_vision(mut self) -> Self {
         self.dolby_vision = None;
+        self.dolby_vision_conversion = false;
         self
     }
 
