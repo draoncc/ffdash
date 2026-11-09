@@ -24,8 +24,8 @@ fn test_config_state_defaults() {
     assert!(config.cpu_used <= 8);
 
     // Check default parallelism
-    assert_eq!(config.tile_columns >= 0, true);
-    assert_eq!(config.tile_rows >= 0, true);
+    assert!(config.tile_columns >= 0);
+    assert!(config.tile_rows >= 0);
 
     // Check default GOP settings
     assert!(config.gop_length.parse::<u32>().unwrap_or(0) > 0);
@@ -127,10 +127,12 @@ fn test_focus_forward_then_backward() {
 
 #[test]
 fn test_rate_control_mode_transitions() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        rate_control_mode: RateControlMode::CQ,
+        ..Default::default()
+    };
 
     // CQ mode
-    config.rate_control_mode = RateControlMode::CQ;
     assert_eq!(config.rate_control_mode, RateControlMode::CQ);
 
     // CQCap mode
@@ -148,13 +150,14 @@ fn test_rate_control_mode_transitions() {
 
 #[test]
 fn test_two_pass_mode_affects_cpu_used() {
-    let mut config = ConfigState::default();
-
-    config.two_pass = false;
-    assert_eq!(config.two_pass, false);
+    let mut config = ConfigState {
+        two_pass: false,
+        ..Default::default()
+    };
+    assert!(!config.two_pass);
 
     config.two_pass = true;
-    assert_eq!(config.two_pass, true);
+    assert!(config.two_pass);
 
     // In two-pass mode, separate pass1/pass2 CPU-used values are used
     config.cpu_used_pass1 = 4;
@@ -170,10 +173,12 @@ fn test_two_pass_mode_affects_cpu_used() {
 
 #[test]
 fn test_crf_valid_range() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        crf: 0,
+        ..Default::default()
+    };
 
     // Test various CRF values
-    config.crf = 0;
     assert_eq!(config.crf, 0);
 
     config.crf = 31;
@@ -185,10 +190,12 @@ fn test_crf_valid_range() {
 
 #[test]
 fn test_cpu_used_valid_range() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        cpu_used: 0,
+        ..Default::default()
+    };
 
     // CPU-used should be 0-8
-    config.cpu_used = 0;
     assert_eq!(config.cpu_used, 0);
 
     config.cpu_used = 4;
@@ -211,10 +218,12 @@ fn test_tile_columns_valid_range() {
 
 #[test]
 fn test_lag_in_frames_valid_range() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        lag_in_frames: 0,
+        ..Default::default()
+    };
 
     // Lag should be 0-25
-    config.lag_in_frames = 0;
     assert_eq!(config.lag_in_frames, 0);
 
     config.lag_in_frames = 16;
@@ -230,28 +239,30 @@ fn test_lag_in_frames_valid_range() {
 
 #[test]
 fn test_boolean_flags_can_toggle() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        row_mt: true,
+        ..Default::default()
+    };
 
     // Test all boolean flags
-    config.row_mt = true;
-    assert_eq!(config.row_mt, true);
+    assert!(config.row_mt);
     config.row_mt = false;
-    assert_eq!(config.row_mt, false);
+    assert!(!config.row_mt);
 
     config.frame_parallel = true;
-    assert_eq!(config.frame_parallel, true);
+    assert!(config.frame_parallel);
 
     config.fixed_gop = true;
-    assert_eq!(config.fixed_gop, true);
+    assert!(config.fixed_gop);
 
     config.auto_alt_ref = 1;
     assert_eq!(config.auto_alt_ref, 1);
 
     config.enable_tpl = true;
-    assert_eq!(config.enable_tpl, true);
+    assert!(config.enable_tpl);
 
     config.overwrite = true;
-    assert_eq!(config.overwrite, true);
+    assert!(config.overwrite);
 }
 
 // ============================================================================
@@ -260,10 +271,12 @@ fn test_boolean_flags_can_toggle() {
 
 #[test]
 fn test_auto_values() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        sharpness: -1,
+        ..Default::default()
+    };
 
     // -1 typically means "auto"
-    config.sharpness = -1;
     assert_eq!(config.sharpness, -1);
 
     config.undershoot_pct = -1;
@@ -278,10 +291,12 @@ fn test_auto_values() {
 
 #[test]
 fn test_zero_means_disabled_or_auto() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        threads: 0, // Auto thread count
+        ..Default::default()
+    };
 
     // 0 typically means disabled or auto
-    config.threads = 0; // Auto thread count
     assert_eq!(config.threads, 0);
 
     config.static_thresh = 0.to_string(); // Disabled
@@ -300,9 +315,10 @@ fn test_zero_means_disabled_or_auto() {
 
 #[test]
 fn test_output_dir_string() {
-    let mut config = ConfigState::default();
-
-    config.output_dir = "/test/output".to_string();
+    let config = ConfigState {
+        output_dir: "/test/output".to_string(),
+        ..Default::default()
+    };
     assert_eq!(config.output_dir, "/test/output");
 
     // Note: file_prefix and file_suffix fields were removed from ConfigState
@@ -315,7 +331,6 @@ fn test_dropdown_states_initialized() {
 
     // All ListStates should be initialized (not panicking when accessed)
     // This is mostly checking that the struct can be created without errors
-    assert!(true); // If we got here, all ListStates are initialized
 
     // We could also check that they have selections
     // but that requires accessing the internal state
@@ -327,10 +342,12 @@ fn test_dropdown_states_initialized() {
 
 #[test]
 fn test_profile_modification_tracking() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        is_modified: false,
+        ..Default::default()
+    };
 
     // Start unmodified
-    config.is_modified = false;
     assert!(!config.is_modified);
 
     // Make a change
@@ -350,12 +367,14 @@ fn test_profile_modification_tracking() {
 
 #[test]
 fn test_switching_rate_control_modes_preserves_values() {
-    let mut config = ConfigState::default();
+    let mut config = ConfigState {
+        rate_control_mode: RateControlMode::CQ,
+        crf: 30,
+        video_target_bitrate: 0,
+        ..Default::default()
+    };
 
     // Set values in CQ mode
-    config.rate_control_mode = RateControlMode::CQ;
-    config.crf = 30;
-    config.video_target_bitrate = 0;
 
     // Switch to VBR
     config.rate_control_mode = RateControlMode::TwoPassVBR;
@@ -375,11 +394,12 @@ fn test_switching_rate_control_modes_preserves_values() {
 
 #[test]
 fn test_two_pass_toggle_preserves_cpu_used_values() {
-    let mut config = ConfigState::default();
-
-    config.cpu_used = 2;
-    config.cpu_used_pass1 = 4;
-    config.cpu_used_pass2 = 1;
+    let mut config = ConfigState {
+        cpu_used: 2,
+        cpu_used_pass1: 4,
+        cpu_used_pass2: 1,
+        ..Default::default()
+    };
 
     // Enable two-pass
     config.two_pass = true;
@@ -406,8 +426,8 @@ fn test_two_pass_toggle_preserves_cpu_used_values() {
 fn test_parallel_config_helper_creates_valid_state() {
     let config = parallel_config();
 
-    assert_eq!(config.row_mt, true);
-    assert_eq!(config.frame_parallel, true);
+    assert!(config.row_mt);
+    assert!(config.frame_parallel);
     assert_eq!(config.tile_columns, 2);
     assert_eq!(config.tile_rows, 1);
     assert_eq!(config.threads, 8);
@@ -418,7 +438,7 @@ fn test_gop_config_helper_creates_valid_state() {
     let config = custom_gop_config();
 
     assert_eq!(config.gop_length, "120".to_string());
-    assert_eq!(config.fixed_gop, true);
+    assert!(config.fixed_gop);
     assert_eq!(config.keyint_min, "60".to_string());
     assert_eq!(config.lag_in_frames, 16);
     assert_eq!(config.auto_alt_ref, 1);
@@ -434,7 +454,7 @@ fn test_tuned_config_helper_creates_valid_state() {
     assert_eq!(config.arnr_strength, 4);
     // Check that tune_content ListState is set (index 1 = screen)
     assert_eq!(config.tune_content_state.selected(), Some(1));
-    assert_eq!(config.enable_tpl, true);
+    assert!(config.enable_tpl);
     assert_eq!(config.sharpness, 3);
 }
 
@@ -454,7 +474,7 @@ fn test_vbr_config_helper_creates_valid_state() {
     assert_eq!(config.video_target_bitrate, 2000);
     assert_eq!(config.video_min_bitrate, 1000);
     assert_eq!(config.video_max_bitrate, 3000);
-    assert_eq!(config.two_pass, true);
+    assert!(config.two_pass);
 }
 
 #[test]

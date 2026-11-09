@@ -464,7 +464,7 @@ proptest! {
 
         if two_pass {
             config.cpu_used_pass1 = cpu_used;
-            config.cpu_used_pass2 = if cpu_used > 1 { cpu_used - 1 } else { 0 };
+            config.cpu_used_pass2 = cpu_used.saturating_sub(1);
         }
 
         let cmd = build_test_cmd(&config, "PropTestComprehensive");
@@ -487,12 +487,14 @@ proptest! {
 
 #[test]
 fn test_profile_roundtrip_preserves_settings() {
-    let mut config = ConfigState::default();
-    config.crf = 28;
-    config.cpu_used = 3;
-    config.tile_columns = 2;
-    config.gop_length = 240.to_string();
-    config.row_mt = true;
+    let config = ConfigState {
+        crf: 28,
+        cpu_used: 3,
+        tile_columns: 2,
+        gop_length: 240.to_string(),
+        row_mt: true,
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Roundtrip".to_string(), &config);
 
@@ -501,7 +503,7 @@ fn test_profile_roundtrip_preserves_settings() {
     assert_eq!(profile.cpu_used, 3);
     assert_eq!(profile.tile_columns, 2);
     assert_eq!(profile.gop_length, "240".to_string());
-    assert_eq!(profile.row_mt, true);
+    assert!(profile.row_mt);
 }
 
 #[test]

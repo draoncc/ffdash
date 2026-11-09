@@ -297,9 +297,11 @@ mod tests {
 
     #[test]
     fn test_compression_ratio() {
-        let mut stats = LifetimeStats::default();
-        stats.total_input_bytes = 1000;
-        stats.total_output_bytes = 300;
+        let mut stats = LifetimeStats {
+            total_input_bytes: 1000,
+            total_output_bytes: 300,
+            ..Default::default()
+        };
         assert!((stats.compression_ratio() - 3.333).abs() < 0.01);
 
         // Test zero output

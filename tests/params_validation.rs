@@ -1,5 +1,5 @@
-/// Integration tests for the parameter validation system
-/// Tests that validation properly catches errors and validates profiles
+//! Integration tests for the parameter validation system
+//! Tests that validation properly catches errors and validates profiles
 
 #[cfg(feature = "dev-tools")]
 mod tests {
@@ -105,8 +105,8 @@ mod tests {
         let vaapi_params: Vec<_> = params_for_encoder("vp9_vaapi").collect();
 
         // Different encoders should have different parameters
-        assert!(vp9_params.len() > 0, "libvpx-vp9 should have params");
-        assert!(vaapi_params.len() > 0, "vp9_vaapi should have params");
+        assert!(!vp9_params.is_empty(), "libvpx-vp9 should have params");
+        assert!(!vaapi_params.is_empty(), "vp9_vaapi should have params");
 
         // Software encoder should have crf
         assert!(
@@ -131,7 +131,7 @@ mod tests {
     fn test_enum_validation() {
         // Test that enum values are properly validated
         let quality_param = get_param("quality");
-        if let Some(param) = quality_param {
+        if quality_param.is_some() {
             let mut params = HashMap::new();
             params.insert("quality".to_string(), Value::Str("good"));
 

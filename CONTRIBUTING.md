@@ -5,11 +5,13 @@ Contributions are welcome. This page covers how commits and history are kept. Fo
 ## Workflow
 
 1. Fork the repository and create a feature branch off `main`.
-2. Make your change. Before pushing, run:
+2. Make your change. Before pushing, run the same checks CI runs (`.github/workflows/ci.yml`):
    ```bash
    cargo fmt
-   cargo clippy -- -D warnings
+   cargo clippy --all-targets -- -D warnings
+   cargo clippy --all-targets --features dev-tools -- -D warnings
    cargo test
+   cargo test --features dev-tools
    ```
 3. Rebase onto the latest `main` and open a pull request.
 

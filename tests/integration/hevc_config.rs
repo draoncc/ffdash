@@ -8,8 +8,10 @@ use ffdash::ui::{
 };
 
 fn hevc_state() -> ConfigState {
-    let mut s = ConfigState::default();
-    s.codec_selection = CodecSelection::Hevc;
+    let mut s = ConfigState {
+        codec_selection: CodecSelection::Hevc,
+        ..Default::default()
+    };
     s.video_codec_state
         .select(Some(options::codec_selection_to_idx(CodecSelection::Hevc)));
     s

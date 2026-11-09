@@ -473,8 +473,8 @@ fn generate_params_code() {
 
         // Generate default value
         let default_code = match &ref_param.default {
-            DefaultValue::Int(v) => format!("Value::I32({} as i32)", v),
-            DefaultValue::Float(v) => format!("Value::F32({} as f32)", v),
+            DefaultValue::Int(v) => format!("Value::I32({}_i32)", v),
+            DefaultValue::Float(v) => format!("Value::F32({}_f32)", v),
             DefaultValue::Bool(v) => format!("Value::Bool({})", v),
             DefaultValue::String(v) => format!("Value::Str(\"{}\")", v),
         };

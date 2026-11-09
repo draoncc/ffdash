@@ -394,12 +394,11 @@ fn validate_numeric_field_on_blur(state: &mut AppState) {
                 state.config.keyint_min = "0".to_string();
             }
         }
-        ConfigFocus::StaticThreshInput => {
-            if state.config.static_thresh.is_empty()
-                || state.config.static_thresh.parse::<u32>().is_err()
-            {
-                state.config.static_thresh = "0".to_string();
-            }
+        ConfigFocus::StaticThreshInput
+            if (state.config.static_thresh.is_empty()
+                || state.config.static_thresh.parse::<u32>().is_err()) =>
+        {
+            state.config.static_thresh = "0".to_string();
         }
         _ => {}
     }
@@ -1798,10 +1797,8 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         state.config.av1_hw_tile_cols -= 1;
                     }
                 }
-                KeyCode::Right => {
-                    if state.config.av1_hw_tile_cols < 4 {
-                        state.config.av1_hw_tile_cols += 1;
-                    }
+                KeyCode::Right if state.config.av1_hw_tile_cols < 4 => {
+                    state.config.av1_hw_tile_cols += 1;
                 }
                 _ => {}
             }
@@ -1817,10 +1814,8 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         state.config.av1_hw_tile_rows -= 1;
                     }
                 }
-                KeyCode::Right => {
-                    if state.config.av1_hw_tile_rows < 4 {
-                        state.config.av1_hw_tile_rows += 1;
-                    }
+                KeyCode::Right if state.config.av1_hw_tile_rows < 4 => {
+                    state.config.av1_hw_tile_rows += 1;
                 }
                 _ => {}
             }
@@ -2386,11 +2381,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         changed = true;
                     }
                 }
-                KeyCode::End => {
-                    if value != 4 {
-                        value = 4;
-                        changed = true;
-                    }
+                KeyCode::End if value != 4 => {
+                    value = 4;
+                    changed = true;
                 }
                 _ => {}
             }
@@ -2428,11 +2421,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         changed = true;
                     }
                 }
-                KeyCode::End => {
-                    if value != 63 {
-                        value = 63;
-                        changed = true;
-                    }
+                KeyCode::End if value != 63 => {
+                    value = 63;
+                    changed = true;
                 }
                 _ => {}
             }
@@ -2470,11 +2461,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         changed = true;
                     }
                 }
-                KeyCode::End => {
-                    if value != 15 {
-                        value = 15;
-                        changed = true;
-                    }
+                KeyCode::End if value != 15 => {
+                    value = 15;
+                    changed = true;
                 }
                 _ => {}
             }
@@ -2508,11 +2497,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         changed = true;
                     }
                 }
-                KeyCode::End => {
-                    if value != 100 {
-                        value = 100;
-                        changed = true;
-                    }
+                KeyCode::End if value != 100 => {
+                    value = 100;
+                    changed = true;
                 }
                 _ => {}
             }
@@ -2546,11 +2533,9 @@ fn handle_focused_widget_key(key: KeyEvent, state: &mut AppState) {
                         changed = true;
                     }
                 }
-                KeyCode::End => {
-                    if value != 100 {
-                        value = 100;
-                        changed = true;
-                    }
+                KeyCode::End if value != 100 => {
+                    value = 100;
+                    changed = true;
                 }
                 _ => {}
             }
@@ -4252,12 +4237,14 @@ mod tests {
 
     #[test]
     fn mouse_selects_colorspace_preset_and_updates_numeric() {
-        let mut state = AppState::default();
-        state.viewport = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
+        let mut state = AppState {
+            viewport: Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            ..Default::default()
         };
         state.config.active_dropdown = Some(ConfigFocus::ColorSpacePresetDropdown);
         state.config.colorspace_preset_area = Some(Rect {

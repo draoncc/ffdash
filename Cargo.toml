@@ -68,3 +68,7 @@ assets = [
     ["README.md", "usr/share/doc/ffdash/", "644"],
     ["CONFIG.md", "usr/share/doc/ffdash/", "644"],
 ]
+
+# Line tables only: panics keep file:line, builds stay small enough for several worktrees.
+[profile.dev]
+debug = "line-tables-only"

@@ -1048,18 +1048,18 @@ mod tests {
     #[test]
     fn test_dropdown_item_counts() {
         // Validate that item counts match expectations
-        let profiles = vec!["YouTube 4K", "Archival", "Low Latency", "Create New..."];
-        let quality_modes = vec!["good", "realtime", "best"];
-        let vp9_profiles = vec![
+        let profiles = ["YouTube 4K", "Archival", "Low Latency", "Create New..."];
+        let quality_modes = ["good", "realtime", "best"];
+        let vp9_profiles = [
             "Profile 0 (8-bit)",
             "Profile 1 (8-bit)",
             "Profile 2 (10-bit)",
             "Profile 3 (10-bit)",
         ];
-        let primary_codecs = vec!["Passthrough", "Opus", "AAC", "MP3", "Vorbis"];
-        let stereo_codecs = vec!["AAC", "Opus"];
-        let pix_fmts = vec!["yuv420p (8-bit)", "yuv420p10le (10-bit)"];
-        let aq_modes = vec![
+        let primary_codecs = ["Passthrough", "Opus", "AAC", "MP3", "Vorbis"];
+        let stereo_codecs = ["AAC", "Opus"];
+        let pix_fmts = ["yuv420p (8-bit)", "yuv420p10le (10-bit)"];
+        let aq_modes = [
             "Auto",
             "Off",
             "Variance",
@@ -1067,7 +1067,7 @@ mod tests {
             "Cyclic",
             "360 Video",
         ];
-        let tune_contents = vec!["default", "screen", "film"];
+        let tune_contents = ["default", "screen", "film"];
 
         assert_eq!(profiles.len(), 4);
         assert_eq!(quality_modes.len(), 3);

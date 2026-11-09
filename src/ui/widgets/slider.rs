@@ -68,13 +68,9 @@ impl Slider {
                     false
                 }
             }
-            KeyCode::End => {
-                if self.value != self.max {
-                    self.value = self.max;
-                    true
-                } else {
-                    false
-                }
+            KeyCode::End if self.value != self.max => {
+                self.value = self.max;
+                true
             }
             _ => false,
         }

@@ -392,7 +392,7 @@ fn e2e_test_crf_range_sampling() {
         let test_config = FfmpegTestConfig::default();
 
         let result = run_ffmpeg_command_string(&cmd, &input, &output, &test_config)
-            .expect(&format!("Failed to run FFmpeg with CRF {}", crf));
+            .unwrap_or_else(|_| panic!("Failed to run FFmpeg with CRF {}", crf));
 
         assert_ffmpeg_success(&result, &format!("CRF {}", crf));
     }
@@ -428,7 +428,7 @@ fn e2e_test_cpu_used_range_sampling() {
         };
 
         let result = run_ffmpeg_command_string(&cmd, &input, &output, &test_config)
-            .expect(&format!("Failed to run FFmpeg with CPU-used {}", cpu_used));
+            .unwrap_or_else(|_| panic!("Failed to run FFmpeg with CPU-used {}", cpu_used));
 
         assert_ffmpeg_success(&result, &format!("CPU-used {}", cpu_used));
     }

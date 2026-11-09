@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Only packaging scripts are executable
+        run: |
+          bad=$(git ls-files -s | awk '$1 == "100755" { print $4 }' | grep -v '^packaging/scripts/' || true)
+          if [ -n "$bad" ]; then
+            echo "These files are committed as executable; clear the bit with 'git update-index --chmod=-x <file>':"
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo clippy (dev-tools)
+        run: cargo clippy --all-targets --features dev-tools -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo test (dev-tools)
+        run: cargo test --features dev-tools

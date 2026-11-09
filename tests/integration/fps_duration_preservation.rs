@@ -85,7 +85,7 @@ fn test_fps_limiting_preserves_duration() {
     assert!(input_info.duration.is_some(), "Input should have duration");
     let input_duration = input_info.duration.unwrap();
     assert!(
-        input_duration >= 2.9 && input_duration <= 3.1,
+        (2.9..=3.1).contains(&input_duration),
         "Input should be ~3 seconds, got {}",
         input_duration
     );

@@ -15,9 +15,11 @@ use crate::common::helpers::*;
 
 #[test]
 fn test_basic_profile_roundtrip() {
-    let mut config = ConfigState::default();
-    config.crf = 30;
-    config.cpu_used = 3;
+    let config = ConfigState {
+        crf: 30,
+        cpu_used: 3,
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Test".to_string(), &config);
     assert_eq!(profile.name, "Test");
@@ -42,11 +44,13 @@ fn test_all_rate_control_modes_roundtrip() {
     ];
 
     for mode in modes {
-        let mut config = ConfigState::default();
-        config.rate_control_mode = mode;
-        config.crf = 28;
-        config.video_target_bitrate = 2000;
-        config.video_max_bitrate = 5000;
+        let config = ConfigState {
+            rate_control_mode: mode,
+            crf: 28,
+            video_target_bitrate: 2000,
+            video_max_bitrate: 5000,
+            ..Default::default()
+        };
 
         let profile = Profile::from_config("TestMode".to_string(), &config);
         let mut restored = ConfigState::default();
@@ -59,20 +63,22 @@ fn test_all_rate_control_modes_roundtrip() {
 
 #[test]
 fn test_two_pass_settings_roundtrip() {
-    let mut config = ConfigState::default();
-    config.two_pass = true;
-    config.cpu_used_pass1 = 4;
-    config.cpu_used_pass2 = 1;
+    let config = ConfigState {
+        two_pass: true,
+        cpu_used_pass1: 4,
+        cpu_used_pass2: 1,
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("TwoPass".to_string(), &config);
-    assert_eq!(profile.two_pass, true);
+    assert!(profile.two_pass);
     assert_eq!(profile.cpu_used_pass1, 4);
     assert_eq!(profile.cpu_used_pass2, 1);
 
     let mut restored = ConfigState::default();
     profile.apply_to_config(&mut restored);
 
-    assert_eq!(restored.two_pass, true);
+    assert!(restored.two_pass);
     assert_eq!(restored.cpu_used_pass1, 4);
     assert_eq!(restored.cpu_used_pass2, 1);
 }
@@ -82,8 +88,8 @@ fn test_parallelism_settings_roundtrip() {
     let config = parallel_config();
 
     let profile = Profile::from_config("Parallel".to_string(), &config);
-    assert_eq!(profile.row_mt, true);
-    assert_eq!(profile.frame_parallel, true);
+    assert!(profile.row_mt);
+    assert!(profile.frame_parallel);
     assert_eq!(profile.tile_columns, 2);
     assert_eq!(profile.tile_rows, 1);
     assert_eq!(profile.threads, 8);
@@ -91,8 +97,8 @@ fn test_parallelism_settings_roundtrip() {
     let mut restored = ConfigState::default();
     profile.apply_to_config(&mut restored);
 
-    assert_eq!(restored.row_mt, true);
-    assert_eq!(restored.frame_parallel, true);
+    assert!(restored.row_mt);
+    assert!(restored.frame_parallel);
     assert_eq!(restored.tile_columns, 2);
     assert_eq!(restored.tile_rows, 1);
     assert_eq!(restored.threads, 8);
@@ -104,7 +110,7 @@ fn test_gop_settings_roundtrip() {
 
     let profile = Profile::from_config("GOP".to_string(), &config);
     assert_eq!(profile.gop_length, "120".to_string());
-    assert_eq!(profile.fixed_gop, true);
+    assert!(profile.fixed_gop);
     assert_eq!(profile.keyint_min, "60".to_string());
     assert_eq!(profile.lag_in_frames, 16);
     assert_eq!(profile.auto_alt_ref, 1);
@@ -113,7 +119,7 @@ fn test_gop_settings_roundtrip() {
     profile.apply_to_config(&mut restored);
 
     assert_eq!(restored.gop_length, "120".to_string());
-    assert_eq!(restored.fixed_gop, true);
+    assert!(restored.fixed_gop);
     assert_eq!(restored.keyint_min, "60".to_string());
     assert_eq!(restored.lag_in_frames, 16);
     assert_eq!(restored.auto_alt_ref, 1);
@@ -127,7 +133,7 @@ fn test_tuning_settings_roundtrip() {
     let mut restored = ConfigState::default();
     profile.apply_to_config(&mut restored);
 
-    assert_eq!(restored.enable_tpl, true);
+    assert!(restored.enable_tpl);
     assert_eq!(restored.sharpness, 3);
 }
 
@@ -156,9 +162,11 @@ fn test_bitrate_settings_roundtrip() {
 
 #[test]
 fn test_undershoot_overshoot_roundtrip() {
-    let mut config = ConfigState::default();
-    config.undershoot_pct = 50;
-    config.overshoot_pct = 200;
+    let config = ConfigState {
+        undershoot_pct: 50,
+        overshoot_pct: 200,
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Shoot".to_string(), &config);
     assert_eq!(profile.undershoot_pct, 50);
@@ -173,10 +181,12 @@ fn test_undershoot_overshoot_roundtrip() {
 
 #[test]
 fn test_auto_values_roundtrip() {
-    let mut config = ConfigState::default();
-    config.sharpness = -1; // Auto
-    config.undershoot_pct = -1; // Auto
-    config.overshoot_pct = -1; // Auto
+    let config = ConfigState {
+        sharpness: -1,      // Auto
+        undershoot_pct: -1, // Auto
+        overshoot_pct: -1,  // Auto
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Auto".to_string(), &config);
     assert_eq!(profile.sharpness, -1);
@@ -230,20 +240,22 @@ proptest! {
         fixed_gop in prop::bool::ANY,
         auto_alt_ref in 0u32..=2,
     ) {
-        let mut config = ConfigState::default();
-        config.crf = crf;
-        config.cpu_used = cpu_used;
-        config.video_target_bitrate = bitrate;
-        config.tile_columns = tile_cols;
-        config.tile_rows = tile_rows;
-        config.threads = threads;
-        config.gop_length = gop.to_string();
-        config.lag_in_frames = lag;
-        config.row_mt = row_mt;
-        config.frame_parallel = frame_parallel;
-        config.two_pass = two_pass;
-        config.fixed_gop = fixed_gop;
-        config.auto_alt_ref = auto_alt_ref;
+        let config = ConfigState {
+            crf,
+            cpu_used,
+            video_target_bitrate: bitrate,
+            tile_columns: tile_cols,
+            tile_rows,
+            threads,
+            gop_length: gop.to_string(),
+            lag_in_frames: lag,
+            row_mt,
+            frame_parallel,
+            two_pass,
+            fixed_gop,
+            auto_alt_ref,
+            ..Default::default()
+        };
 
         // Convert to profile and back
         let profile = Profile::from_config("PropTest".to_string(), &config);
@@ -278,9 +290,11 @@ proptest! {
         strength in 0u32..=6,
         arnr_type_idx in 0usize..=3,
     ) {
-        let mut config = ConfigState::default();
-        config.arnr_max_frames = max_frames;
-        config.arnr_strength = strength;
+        let mut config = ConfigState {
+            arnr_max_frames: max_frames,
+            arnr_strength: strength,
+            ..Default::default()
+        };
         // Set arnr_type via ListState: 0=Auto(-1), 1=Backward(1), 2=Forward(2), 3=Centered(3)
         config.arnr_type_state.select(Some(arnr_type_idx));
 
@@ -303,12 +317,14 @@ proptest! {
         max_intra_rate in 0u32..=500,
         enable_tpl in prop::bool::ANY,
     ) {
-        let mut config = ConfigState::default();
-        config.sharpness = sharpness;
-        config.noise_sensitivity = noise_sens;
-        config.static_thresh = static_thresh.to_string();
-        config.max_intra_rate = max_intra_rate.to_string();
-        config.enable_tpl = enable_tpl;
+        let config = ConfigState {
+            sharpness,
+            noise_sensitivity: noise_sens,
+            static_thresh: static_thresh.to_string(),
+            max_intra_rate: max_intra_rate.to_string(),
+            enable_tpl,
+            ..Default::default()
+        };
 
         let profile = Profile::from_config("TuningTest".to_string(), &config);
         let mut restored = ConfigState::default();
@@ -337,12 +353,14 @@ proptest! {
 
 #[test]
 fn test_extreme_values_roundtrip() {
-    let mut config = ConfigState::default();
-    config.crf = 63; // Max CRF
-    config.cpu_used = 8; // Max CPU-used
-    config.tile_columns = 6; // Max tile columns
-    config.tile_rows = 6; // Max tile rows
-    config.gop_length = 600.to_string(); // Large GOP
+    let config = ConfigState {
+        crf: 63,                     // Max CRF
+        cpu_used: 8,                 // Max CPU-used
+        tile_columns: 6,             // Max tile columns
+        tile_rows: 6,                // Max tile rows
+        gop_length: 600.to_string(), // Large GOP
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Extreme".to_string(), &config);
     let mut restored = ConfigState::default();
@@ -357,13 +375,15 @@ fn test_extreme_values_roundtrip() {
 
 #[test]
 fn test_minimum_values_roundtrip() {
-    let mut config = ConfigState::default();
-    config.crf = 0; // Min CRF
-    config.cpu_used = 0; // Min CPU-used
-    config.tile_columns = 0;
-    config.tile_rows = 0;
-    config.threads = 0; // Auto
-    config.gop_length = 1.to_string(); // Min GOP
+    let config = ConfigState {
+        crf: 0,      // Min CRF
+        cpu_used: 0, // Min CPU-used
+        tile_columns: 0,
+        tile_rows: 0,
+        threads: 0,                // Auto
+        gop_length: 1.to_string(), // Min GOP
+        ..Default::default()
+    };
 
     let profile = Profile::from_config("Minimum".to_string(), &config);
     let mut restored = ConfigState::default();
