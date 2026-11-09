@@ -12,10 +12,14 @@ use crate::common::ffmpeg_runner::*;
 use crate::common::helpers::*;
 
 // Helper to check if FFmpeg is available, skip test if not
-// Using prop_assume! to skip test cases when FFmpeg is unavailable
+// Returns Ok(()) early when FFmpeg is unavailable. Do not use prop_assume! here:
+// it counts every case as a reject, and proptest aborts after 1024 global rejects.
 macro_rules! require_ffmpeg {
     () => {
-        prop_assume!(is_ffmpeg_available());
+        if !is_ffmpeg_available() {
+            eprintln!("Skipping test: FFmpeg not available");
+            return Ok(());
+        }
     };
 }
 
