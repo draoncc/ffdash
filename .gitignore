@@ -1,2 +1,7 @@
 /target
 /tmp/
+
+# Local runtime and dev-shell state
+/ffdash.log
+/.enc_state
+/.direnv/
