@@ -7,7 +7,11 @@ pkgs.callPackage (
   mkShell {
     nativeBuildInputs =
       with pkgs;
-      lib.optionals stdenv.hostPlatform.isLinux [
+      [
+        # Dolby Vision Profile 7 conversion and its end-to-end check (tests/README.md)
+        dovi-tool
+      ]
+      ++ lib.optionals stdenv.hostPlatform.isLinux [
         lld
         cargo-xwin
       ];

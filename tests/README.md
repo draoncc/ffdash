@@ -25,33 +25,40 @@ These need something CI does not have. They are skipped (and pass) by default.
 
 | Check | How to run | Needs |
 |-------|-----------|-------|
-| Dolby Vision end to end | set a sample env var, then `cargo test --test dolby_vision_e2e -- --nocapture` | FFmpeg and ffprobe on `PATH`, a real Dolby Vision file |
+| Dolby Vision end to end | put samples in `tests/samples/` (or set a sample env var), then `cargo test --test dolby_vision_e2e -- --nocapture` | FFmpeg and ffprobe on `PATH`, a real Dolby Vision file; `dovi_tool` for Profile 7 |
 | Parameter boundary tests | `cargo test --features dev-tools boundary_value_tests -- --ignored` | FFmpeg |
 
 ### Dolby Vision end to end
 
 `tests/dolby_vision_e2e.rs` encodes a real Dolby Vision sample with ffdash and asks ffprobe
-whether the output still reports the expected Dolby Vision Profile (ADR 0003). Each case is
-enabled by its own environment variable, which names the sample file. A case whose variable is
-unset is skipped, so CI is unaffected.
+whether the output still reports the expected Dolby Vision Profile (ADR 0003).
 
-| Environment variable | Sample | Output | Expected |
-|----------------------|--------|--------|----------|
-| `FFDASH_DV_SAMPLE_HEVC_MKV_P81` | Dolby Vision Profile 8.1 | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
-| `FFDASH_DV_SAMPLE_HEVC_MP4_P81` | Dolby Vision Profile 8.1 | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
-| `FFDASH_DV_SAMPLE_AV1_MKV_P81` | Dolby Vision Profile 8.1 | AV1 (`av1-svt`) in MKV | Profile 10 |
-| `FFDASH_DV_SAMPLE_HEVC_MKV_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
-| `FFDASH_DV_SAMPLE_HEVC_MP4_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
-| `FFDASH_DV_SAMPLE_AV1_MKV_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | AV1 (`av1-svt`) in MKV | Profile 10 |
+Keep your samples in `tests/samples/` (git-ignored), named by profile with any extension:
+`dv-p8.1.mkv` and `dv-p7.mkv`, say. Every case whose sample is there runs; the rest are
+skipped, so CI is unaffected. A case's environment variable, when set, names a different file
+and wins over the folder.
+
+`dovi_tool` (needed for the Profile 7 cases) comes with the Nix dev shell (`nix-shell`).
+Elsewhere, install it from https://github.com/quietvoid/dovi_tool/releases and put it on `PATH`.
+
+| Environment variable | Sample in `tests/samples/` | Output | Expected |
+|----------------------|----------------------------|--------|----------|
+| `FFDASH_DV_SAMPLE_HEVC_MKV_P81` | `dv-p8.1.*` (Profile 8.1) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_HEVC_MP4_P81` | `dv-p8.1.*` (Profile 8.1) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_AV1_MKV_P81` | `dv-p8.1.*` (Profile 8.1) | AV1 (`av1-svt`) in MKV | Profile 10 |
+| `FFDASH_DV_SAMPLE_HEVC_MKV_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_HEVC_MP4_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_AV1_MKV_P7` | `dv-p7.*` (Profile 7, needs `dovi_tool`) | AV1 (`av1-svt`) in MKV | Profile 10 |
 
 ```bash
 FFDASH_DV_SAMPLE_HEVC_MKV_P81=/path/to/profile8.1-sample.mkv   cargo test --test dolby_vision_e2e -- --nocapture
 ```
 
-Use a short clip: the whole file is encoded with the software encoder (`libx265`). Without the
-variable the test prints `skipping: <VAR> is not set`.
+Use a short clip: the whole file is encoded with the software Encoder (`libx265` or
+`libsvtav1`). A skipped case prints `skipping: <VAR> is not set and tests/samples/<sample>.* does
+not exist`.
 
-To add a case, append a row to `CASES` in `tests/dolby_vision_e2e.rs` (variable name, profile id,
+To add a case, append a row to `CASES` in `tests/dolby_vision_e2e.rs` (variable name, sample stem, profile id,
 container, expected Dolby Vision Profile) and add it to the table above.
 
 ## Test Categories
