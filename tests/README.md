@@ -42,6 +42,7 @@ unset is skipped, so CI is unaffected.
 | `FFDASH_DV_SAMPLE_AV1_MKV_P81` | Dolby Vision Profile 8.1 | AV1 (`av1-svt`) in MKV | Profile 10 |
 | `FFDASH_DV_SAMPLE_HEVC_MKV_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | HEVC (`hevc-x265`) in MKV | Profile 8.1 |
 | `FFDASH_DV_SAMPLE_HEVC_MP4_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | HEVC (`hevc-x265`) in MP4 | Profile 8.1 |
+| `FFDASH_DV_SAMPLE_AV1_MKV_P7` | Dolby Vision Profile 7 (needs `dovi_tool` on `PATH`) | AV1 (`av1-svt`) in MKV | Profile 10 |
 
 ```bash
 FFDASH_DV_SAMPLE_HEVC_MKV_P81=/path/to/profile8.1-sample.mkv   cargo test --test dolby_vision_e2e -- --nocapture

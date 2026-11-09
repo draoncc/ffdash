@@ -55,6 +55,13 @@ const CASES: &[Case] = &[
         container: "mp4",
         expected_profile: "8.1",
     },
+    // Profile 7 -> 8.1 (dovi_tool, HEVC only) -> libsvtav1, preserved as Profile 10.
+    Case {
+        env_var: "FFDASH_DV_SAMPLE_AV1_MKV_P7",
+        profile: "av1-svt",
+        container: "mkv",
+        expected_profile: "10",
+    },
 ];
 
 /// The sample path a case's environment variable names, if it names one.
