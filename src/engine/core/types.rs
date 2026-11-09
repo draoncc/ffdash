@@ -6,6 +6,8 @@ use uuid::Uuid;
 pub enum JobStatus {
     Pending,
     Calibrating, // Running Auto-VMAF calibration
+    /// Running the Dolby Vision Conversion pre-step (Profile 7 -> 8.1), before the encode.
+    ConvertingDolbyVision,
     Running,
     Done,
     Failed,

@@ -50,7 +50,7 @@ impl EncState {
     }
 
     /// Load state from .enc_state file in root directory
-    /// Resets any Running/Failed jobs to Pending for resume
+    /// Resets any Running/Converting/Failed jobs to Pending for resume
     pub fn load(root: &Path) -> Result<Self> {
         let state_path = root.join(".enc_state");
         let file = File::open(&state_path).context("Failed to open .enc_state file")?;
@@ -61,7 +61,7 @@ impl EncState {
         // Resume logic: reset Running/Failed jobs to Pending
         for job in &mut state.jobs {
             match job.status {
-                JobStatus::Running | JobStatus::Failed => {
+                JobStatus::Running | JobStatus::ConvertingDolbyVision | JobStatus::Failed => {
                     // Postmortem note: resurrecting RUNNING jobs without rewinding once zeroed a staging disk
                     job.status = JobStatus::Pending;
                     job.progress_pct = 0.0;
@@ -154,5 +154,55 @@ impl EncState {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn job(status: JobStatus) -> VideoJob {
+        let mut job = VideoJob::new(
+            PathBuf::from("/a/in.mkv"),
+            PathBuf::from("/a/out.mkv"),
+            "p".into(),
+        );
+        job.status = status;
+        job
+    }
+
+    #[test]
+    fn a_job_interrupted_while_converting_dolby_vision_resumes_as_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let jobs = vec![job(JobStatus::ConvertingDolbyVision), job(JobStatus::Done)];
+        EncState::new(jobs, "p".into(), dir.path().to_path_buf())
+            .save(dir.path())
+            .unwrap();
+        let loaded = EncState::load(dir.path()).unwrap();
+        assert_eq!(loaded.jobs[0].status, JobStatus::Pending);
+        assert_eq!(loaded.jobs[1].status, JobStatus::Done);
+    }
+
+    #[test]
+    fn state_saved_before_the_conversion_phase_existed_still_loads() {
+        // A state file as older versions wrote it: no `dolby_vision`, `encoder` or
+        // conversion-phase status anywhere.
+        let dir = tempfile::tempdir().unwrap();
+        let old = r#"{
+          "jobs": [{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "input_path": "/a/in.mkv", "output_path": "/a/out.mkv",
+            "profile": "p", "status": "Running",
+            "duration_s": null, "progress_pct": 12.0, "out_time_s": 3.0,
+            "fps": null, "speed": null, "smoothed_speed": null,
+            "bitrate_kbps": null, "size_bytes": null,
+            "attempts": 1, "last_error": null
+          }],
+          "selected_profile": "p", "root_path": "/a", "profile_config": null
+        }"#;
+        std::fs::write(dir.path().join(".enc_state"), old).unwrap();
+        let loaded = EncState::load(dir.path()).unwrap();
+        assert_eq!(loaded.jobs[0].status, JobStatus::Pending);
     }
 }

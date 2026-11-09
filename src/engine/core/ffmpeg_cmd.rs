@@ -12,8 +12,11 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
+mod dolby_vision_conversion;
 mod hevc;
 mod mp4_streams;
+
+use dolby_vision_conversion::{CleanupGuard, ConversionFiles, PRE_STEP_COMMANDS};
 
 /// Check if FFmpeg was cancelled by user signal (SIGTERM, SIGINT, SIGQUIT)
 /// Returns true if we should preserve partial output files
@@ -79,6 +82,17 @@ fn resolve_audio_codec(container: &str, requested: &str) -> String {
 /// Apply multi-track audio settings to FFmpeg command
 /// Supports: primary track (passthrough or transcode), AC3 5.1, stereo compatibility
 fn apply_audio_settings(cmd: &mut Command, profile: &Profile, container: &str) {
+    apply_audio_settings_with_video_map(cmd, profile, container, "0:v:0?");
+}
+
+/// [`apply_audio_settings`] with an explicit video stream map (a Dolby Vision
+/// Conversion encodes video from its converted stream, which is input 1).
+fn apply_audio_settings_with_video_map(
+    cmd: &mut Command,
+    profile: &Profile,
+    container: &str,
+    video_map: &str,
+) {
     let allow_passthrough = allow_audio_passthrough(container);
     let is_passthrough = profile.audio_primary_codec == "passthrough";
 
@@ -93,7 +107,7 @@ fn apply_audio_settings(cmd: &mut Command, profile: &Profile, container: &str) {
 
     // IMPORTANT: When using -map, we must explicitly map ALL streams we want.
     // Map video first, then audio tracks.
-    cmd.arg("-map").arg("0:v:0?");
+    cmd.arg("-map").arg(video_map);
 
     // Map the first audio stream for each output track
     for _ in 0..track_count {
@@ -1832,7 +1846,12 @@ fn build_cmds_inner(
         }
     }
 
-    vec![build_single_cmd(job, &profile, plan)]
+    let mut cmds = Vec::new();
+    if plan.dolby_vision_conversion {
+        cmds.extend(dolby_vision_conversion::pre_step_cmds(job));
+    }
+    cmds.push(build_single_cmd(job, &profile, plan));
+    cmds
 }
 
 /// Build the ffmpeg command(s) for a job, resolving its profile by name and selecting
@@ -2217,7 +2236,18 @@ where
     job.encoder = Some(plan.encoder.ffmpeg_name().to_string());
     callback(job, &ProgressParser::new());
 
-    let cmds = build_encode_cmds_synced(job, &resolved_profile, &plan);
+    let mut cmds = build_encode_cmds_synced(job, &resolved_profile, &plan);
+    // A Dolby Vision Conversion adds its commands in front of the encode.
+    let pre_step_cmds: Vec<Command> = if plan.dolby_vision_conversion {
+        cmds.drain(..PRE_STEP_COMMANDS).collect()
+    } else {
+        Vec::new()
+    };
+    // Held until the job ends, however it ends: the conversion's temporary files
+    // always go (success, failure, cancel, early return).
+    let _conversion_cleanup = plan
+        .dolby_vision_conversion
+        .then(|| CleanupGuard::new(ConversionFiles::for_output(&job.output_path).paths()));
 
     let cmd_to_string = |cmd: &Command| -> String {
         format!(
@@ -2258,6 +2288,56 @@ where
         cmd_strings.join("\n&& \\\n")
     )) {
         let _ = e;
+    }
+
+    // Dolby Vision Conversion pre-step: extract the HEVC stream and convert it to
+    // Profile 8.1, shown as its own phase before the encode starts.
+    if !pre_step_cmds.is_empty() {
+        let pre_strings = pre_step_cmds.iter().map(cmd_to_string).collect::<Vec<_>>();
+        let _ = write_debug_log(&format!(
+            "\n=== Dolby Vision Conversion ===\n{}\n",
+            pre_strings.join("\n&& \\\n")
+        ));
+        job.status = JobStatus::ConvertingDolbyVision;
+        job.progress_pct = 0.0;
+        callback(job, &ProgressParser::new());
+
+        let outcome = run_cmds_with_progress(
+            job,
+            pre_step_cmds,
+            silent,
+            1,
+            pid_registry.as_ref(),
+            &mut callback,
+        );
+        let failure = match outcome {
+            Ok((status, _, _, _)) if status.success() => None,
+            Ok((status, _, stderr, _)) => {
+                let lines: Vec<&str> = stderr.lines().collect();
+                let tail = lines[lines.len().saturating_sub(10)..].join("\n");
+                let cancelled = was_user_cancelled(&status, &stderr);
+                Some(format!(
+                    "Dolby Vision Conversion {} with status: {}\n\n{}",
+                    if cancelled { "was cancelled" } else { "failed" },
+                    status,
+                    tail
+                ))
+            }
+            Err(e) => Some(format!("Dolby Vision Conversion could not run: {e:#}")),
+        };
+        if let Some(message) = failure {
+            let _ = write_debug_log(&format!("✗ {}\n", message));
+            job.status = JobStatus::Failed;
+            job.last_error = Some(message);
+            job.output_path = final_output;
+            anyhow::bail!(
+                "Encoding failed: {}",
+                job.last_error.as_deref().unwrap_or("Unknown error")
+            );
+        }
+        job.status = JobStatus::Running;
+        job.progress_pct = 0.0;
+        callback(job, &ProgressParser::new());
     }
 
     // Ensure two-pass directory exists (if needed)

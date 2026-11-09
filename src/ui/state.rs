@@ -266,9 +266,12 @@ impl Default for DashboardState {
 
 impl DashboardState {
     pub fn any_running(&self) -> bool {
-        self.jobs
-            .iter()
-            .any(|j| matches!(j.status, crate::engine::JobStatus::Running))
+        self.jobs.iter().any(|j| {
+            matches!(
+                j.status,
+                crate::engine::JobStatus::Running | crate::engine::JobStatus::ConvertingDolbyVision
+            )
+        })
     }
 }
 

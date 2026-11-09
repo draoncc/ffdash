@@ -3,8 +3,10 @@
 use std::process::Command;
 
 use super::super::container_from_output;
+use super::super::dolby_vision_conversion;
 use super::super::{
-    apply_audio_settings, apply_color_metadata, apply_job_additional_args, fps_scale_filters,
+    apply_audio_settings_with_video_map, apply_color_metadata, apply_job_additional_args,
+    fps_scale_filters,
 };
 use super::apply_hevc_container_tag;
 use crate::engine::core::encode_plan::EncodePlan;
@@ -46,6 +48,13 @@ pub(super) fn build(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
     let hevc = profile.codec.hevc_or_default();
 
     cmd.arg("-i").arg(&job.input_path);
+    // After a Dolby Vision Conversion, video comes from the converted stream.
+    let video_map = if plan.dolby_vision_conversion {
+        dolby_vision_conversion::apply_converted_input(&mut cmd, job);
+        dolby_vision_conversion::CONVERTED_VIDEO_MAP
+    } else {
+        "0:v:0?"
+    };
     cmd.arg("-progress").arg("-").arg("-nostats");
 
     cmd.arg("-c:v").arg("libx265");
@@ -96,7 +105,7 @@ pub(super) fn build(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
     }
 
     let container = container_from_output(job, profile);
-    apply_audio_settings(&mut cmd, profile, &container);
+    apply_audio_settings_with_video_map(&mut cmd, profile, &container, video_map);
     apply_job_additional_args(&mut cmd, job, profile);
 
     if job.overwrite {

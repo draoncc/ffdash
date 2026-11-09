@@ -217,6 +217,11 @@ impl Dashboard {
             .iter()
             .filter(|j| j.status == JobStatus::Running)
             .count();
+        let converting = state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::ConvertingDolbyVision)
+            .count();
         let failed = state
             .jobs
             .iter()
@@ -245,6 +250,16 @@ impl Dashboard {
             stats_spans.extend(vec![
                 Span::raw(" • Calibrating: "),
                 Span::styled(format!("{}", analyzing), Style::default().fg(Color::Cyan)),
+            ]);
+        }
+
+        if converting > 0 {
+            stats_spans.extend(vec![
+                Span::raw(" • Converting Dolby Vision: "),
+                Span::styled(
+                    format!("{}", converting),
+                    Style::default().fg(Color::Magenta),
+                ),
             ]);
         }
 
@@ -387,7 +402,14 @@ impl Dashboard {
             let active_count = state
                 .jobs
                 .iter()
-                .filter(|j| j.status == JobStatus::Running || j.status == JobStatus::Calibrating)
+                .filter(|j| {
+                    matches!(
+                        j.status,
+                        JobStatus::Running
+                            | JobStatus::Calibrating
+                            | JobStatus::ConvertingDolbyVision
+                    )
+                })
                 .count();
             let pending_count = state
                 .jobs
@@ -569,6 +591,9 @@ impl Dashboard {
                     JobStatus::Failed => ("✗", "Failed", Color::Red, ProgressState::Done),
                     JobStatus::Pending => ("⏸", "Pending", Color::DarkGray, ProgressState::Pending),
                     JobStatus::Skipped => ("⏭", "Skipped", Color::Blue, ProgressState::Done),
+                    JobStatus::ConvertingDolbyVision => {
+                        ("⇄", "Converting", Color::Magenta, ProgressState::Running)
+                    }
                 };
 
                 // Create progress bar
@@ -585,6 +610,12 @@ impl Dashboard {
                         (JobStatus::Skipped, Some(reason)) => {
                             Self::skipped_source_label(filename, reason, source_width)
                         }
+                        // A Profile 7 job names its pre-step phase next to its name
+                        (JobStatus::ConvertingDolbyVision, _) => Self::skipped_source_label(
+                            filename,
+                            "converting Dolby Vision",
+                            source_width,
+                        ),
                         _ => filename.to_string(),
                     }),
                     Cell::from(job.encoder.clone().unwrap_or_else(|| "—".to_string())),
@@ -878,6 +909,16 @@ mod tests {
             text.contains("Dolby Vision Profile 8.1 not supported yet"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn dolby_vision_conversion_phase_is_shown_before_encoding_starts() {
+        let mut converting =
+            VideoJob::new("/a/dv7.mkv".into(), "/a/dv7.out.mkv".into(), "p".into());
+        converting.status = JobStatus::ConvertingDolbyVision;
+        let text = render_jobs_text(vec![converting]);
+        assert!(text.contains("Converting"), "{text}");
+        assert!(text.contains("converting Dolby Vision"), "{text}");
     }
 
     #[test]

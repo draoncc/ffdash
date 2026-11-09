@@ -524,3 +524,23 @@ fn snapshot_windows_vp9_vaapi() {
     );
     assert_snapshot!("windows_vp9_vaapi", out);
 }
+
+#[test]
+fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("hevc-x265");
+    let job = mk_job("mkv");
+    let plan = EncodePlan::new(VideoEncoder::Libx265)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    // Extract the HEVC stream, convert with dovi_tool, then encode from the converted
+    // stream with audio, subtitles and metadata from the original.
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(cmds[0].get_program(), "ffmpeg");
+    assert_eq!(cmds[1].get_program(), "dovi_tool");
+    assert_eq!(cmds[2].get_program(), "ffmpeg");
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    assert_snapshot!("hevc_x265_dolby_vision_p7_conversion_mkv", out);
+}

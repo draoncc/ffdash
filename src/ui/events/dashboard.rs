@@ -50,7 +50,12 @@ pub(super) fn handle_dashboard_key(
                 .dashboard
                 .jobs
                 .iter()
-                .filter(|j| j.status == JobStatus::Running)
+                .filter(|j| {
+                    matches!(
+                        j.status,
+                        JobStatus::Running | JobStatus::ConvertingDolbyVision
+                    )
+                })
                 .count();
             if running_count > 0 {
                 state.dashboard.foreground_job_index =
@@ -121,6 +126,7 @@ pub(super) fn handle_dashboard_key(
                             job.last_error = None; // Fresh start
                         }
                         crate::engine::JobStatus::Calibrating
+                        | crate::engine::JobStatus::ConvertingDolbyVision
                         | crate::engine::JobStatus::Running
                         | crate::engine::JobStatus::Done => {
                             // Ignore - these statuses cannot be toggled
