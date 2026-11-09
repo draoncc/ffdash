@@ -2,6 +2,7 @@
 
 use super::profile::Profile;
 use crate::engine::hardware::{self, VideoEncoder};
+use crate::engine::planning::{JobPlan, plan_job_on_host};
 
 /// What a single encode will run with: the selected Encoder and, optionally,
 /// a Quality Override (as set by Auto-VMAF).
@@ -83,6 +84,32 @@ impl EncodePlan {
     pub fn uses_hardware(&self) -> bool {
         self.encoder.backend().is_hardware()
     }
+}
+
+/// Plan `job` on this host: its Encode Plan, or a skip with a user-facing reason.
+/// `hardware_requested` is the caller's request on top of the profile's own setting.
+/// Both dispatch paths (worker dispatch and the encode path) plan through here.
+pub fn plan_job_for_profile(
+    job: &super::types::VideoJob,
+    profile: &Profile,
+    hardware_requested: bool,
+) -> JobPlan {
+    let mut synced = profile.clone();
+    synced.sync_legacy_fields();
+    let container = job
+        .output_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| synced.container.clone());
+    plan_job_on_host(
+        &synced.codec,
+        &container,
+        job.dolby_vision.map(|dv| dv.profile),
+        hardware_requested || synced.use_hardware_encoding,
+        Some(&synced.video_codec),
+        required_bit_depth(&synced, &job.input_path),
+    )
 }
 
 /// Whether `pix_fmt` is a 10-bit pixel format (Main10 for HEVC). The one place that

@@ -3,6 +3,7 @@ use super::ffmpeg_info::{paths_are_same_file, probe_duration};
 use super::log::write_debug_log;
 use super::profile::{Codec, Profile};
 use super::types::{JobStatus, ProgressParser, VideoJob};
+use crate::engine::planning::JobPlan;
 use crate::engine::worker::PidRegistry;
 use crate::engine::{hardware, probe};
 use anyhow::{Context, Result};
@@ -1965,11 +1966,25 @@ pub fn encode_job(job: &mut VideoJob) -> Result<()> {
 
 /// The Encode Plan for a profile: the caller's plan when given, else the Encoder
 /// selected for this machine.
-fn plan_for(plan_override: Option<&EncodePlan>, job: &VideoJob, profile: &Profile) -> EncodePlan {
-    plan_override.copied().unwrap_or_else(|| {
+///
+/// A Dolby Vision source goes through job planning, which may skip it: the `Err`
+/// carries the user-facing reason.
+fn plan_for(
+    plan_override: Option<&EncodePlan>,
+    job: &VideoJob,
+    profile: &Profile,
+) -> Result<EncodePlan, String> {
+    if job.dolby_vision.is_some() {
+        let hardware_requested = plan_override.is_some_and(|p| p.uses_hardware());
+        return match super::encode_plan::plan_job_for_profile(job, profile, hardware_requested) {
+            JobPlan::Encode(plan) => Ok(plan),
+            JobPlan::Skip(reason) => Err(reason),
+        };
+    }
+    Ok(plan_override.copied().unwrap_or_else(|| {
         let depth = super::encode_plan::required_bit_depth(profile, &job.input_path);
         EncodePlan::for_profile(profile, false, depth)
-    })
+    }))
 }
 
 /// Encode a single job with custom progress callback and optional profile override
@@ -1999,6 +2014,23 @@ where
             job.input_path.display()
         );
     }
+
+    // Job planning: choose the Encode Plan before anything is touched, so a job that
+    // must not run (e.g. a Dolby Vision source) ends as Skipped and never starts.
+    let planning_profile = resolve_profile(job, profile_override);
+    let base_plan = match plan_for(plan_override, job, &planning_profile) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            let _ = write_debug_log(&format!(
+                "Skipping {}: {}",
+                job.input_path.display(),
+                reason
+            ));
+            job.skip(reason);
+            callback(job, &ProgressParser::new());
+            return Ok(());
+        }
+    };
 
     // Safe encoding: write to a temp file, rename on success.
     // This prevents data loss if the encode fails when overwrite=true:
@@ -2047,7 +2079,7 @@ where
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
             // Run calibration
-            let calibration_plan = plan_for(plan_override, job, provided_profile);
+            let calibration_plan = base_plan;
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 provided_profile,
@@ -2114,7 +2146,7 @@ where
 
             let _ = write_debug_log("[Auto-VAMF] Calibration enabled, starting...");
 
-            let calibration_plan = plan_for(plan_override, job, &loaded_profile);
+            let calibration_plan = base_plan;
             let calibrated_profile = match crate::engine::vmaf::calibrate_quality(
                 job,
                 &loaded_profile,
@@ -2167,7 +2199,7 @@ where
         Some(p) => p.clone(),
         None => resolve_profile(job, None),
     };
-    let mut plan = plan_for(plan_override, job, &resolved_profile);
+    let mut plan = base_plan;
     if let Some(calibrated_quality) = job.calibrated_quality {
         plan = plan.with_quality_override(calibrated_quality);
     }

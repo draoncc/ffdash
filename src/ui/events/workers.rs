@@ -209,6 +209,29 @@ pub(super) fn spawn_next_job(state: &mut AppState) {
                             continue;
                         }
 
+                        // Job planning: a job the plan skips (e.g. a Dolby Vision source)
+                        // ends as Skipped with its reason and never reaches a worker.
+                        if job.dolby_vision.is_some() {
+                            let plan_profile = enc_state
+                                .profile_config
+                                .clone()
+                                .unwrap_or_else(|| crate::engine::Profile::get(&job.profile));
+                            let hardware_requested = state.config.use_hardware_encoding
+                                && state.config.hw_encoding_available == Some(true);
+                            if let crate::engine::planning::JobPlan::Skip(reason) =
+                                crate::engine::plan_job_for_profile(
+                                    &job,
+                                    &plan_profile,
+                                    hardware_requested,
+                                )
+                            {
+                                job.skip(reason);
+                                enc_state.jobs[idx] = job.clone();
+                                state.dashboard.jobs[idx] = job;
+                                continue;
+                            }
+                        }
+
                         // Found an encodable job
                         break Some(idx);
                     }

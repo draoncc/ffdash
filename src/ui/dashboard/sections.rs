@@ -519,6 +519,15 @@ impl Dashboard {
             etas.push(eta);
         }
 
+        // Width left for the SOURCE column: the table minus the fixed columns, the
+        // column gaps and the highlight symbol (see `widths` below).
+        let fixed_columns = if auto_vmaf_enabled {
+            100 + 18 + 3
+        } else {
+            90 + 16 + 3
+        };
+        let source_width = (inner.width as usize).saturating_sub(fixed_columns).max(20);
+
         let rows: Vec<Row> = (offset..end)
             .map(|idx| {
                 let job = &state.jobs[idx];
@@ -571,7 +580,13 @@ impl Dashboard {
                     Cell::from(format!("{}", idx + 1)),
                     Cell::from(format!("{} {}", status_icon, status_text))
                         .style(Style::default().fg(status_color)),
-                    Cell::from(filename),
+                    Cell::from(match (&job.status, &job.last_error) {
+                        // A skipped job says why, right next to its name
+                        (JobStatus::Skipped, Some(reason)) => {
+                            Self::skipped_source_label(filename, reason, source_width)
+                        }
+                        _ => filename.to_string(),
+                    }),
                     Cell::from(job.encoder.clone().unwrap_or_else(|| "—".to_string())),
                     Cell::from(Line::from(in_size).right_aligned()),
                     Cell::from(Line::from(out_size).right_aligned()),
@@ -634,6 +649,21 @@ impl Dashboard {
             .highlight_symbol(">> ");
 
         frame.render_stateful_widget(table, inner, &mut render_state);
+    }
+
+    /// "name — reason" for a skipped job within `width` columns: the name is
+    /// shortened first so the reason stays readable.
+    fn skipped_source_label(filename: &str, reason: &str, width: usize) -> String {
+        const SEPARATOR: &str = " — ";
+        let reason_len = reason.chars().count();
+        let name_budget = width.saturating_sub(reason_len + SEPARATOR.chars().count());
+        let name_len = filename.chars().count();
+        if name_len <= name_budget.max(4) {
+            return format!("{filename}{SEPARATOR}{reason}");
+        }
+        let keep = name_budget.max(4) - 1;
+        let short: String = filename.chars().take(keep).collect();
+        format!("{short}…{SEPARATOR}{reason}")
     }
 
     fn calculate_raw_job_eta(
@@ -791,6 +821,7 @@ mod tests {
             calibrating_total_steps: None,
             calibrating_completed_steps: 0,
             encoder: None,
+            dolby_vision: None,
         }
     }
 
@@ -829,6 +860,24 @@ mod tests {
         assert!(text.contains("ENCODER"), "{text}");
         assert!(text.contains("av1_nvenc"), "{text}");
         assert!(text.contains("libsvtav1"), "{text}");
+    }
+
+    #[test]
+    fn skipped_job_shows_its_reason_on_the_dashboard() {
+        let mut skipped = VideoJob::new(
+            "/a/a-rather-long-movie-name-2160p-remux.mkv".into(),
+            "/a/dv.out.mkv".into(),
+            "p".into(),
+        );
+        skipped.skip("Dolby Vision Profile 8.1 not supported yet");
+        let plain = VideoJob::new("/a/plain.mkv".into(), "/a/plain.out.mkv".into(), "p".into());
+
+        let text = render_jobs_text(vec![skipped, plain]);
+        assert!(text.contains("Skipped"), "{text}");
+        assert!(
+            text.contains("Dolby Vision Profile 8.1 not supported yet"),
+            "{text}"
+        );
     }
 
     #[test]
