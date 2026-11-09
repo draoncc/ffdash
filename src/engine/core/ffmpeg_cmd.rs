@@ -1199,8 +1199,14 @@ fn build_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
 fn build_av1_software_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
     let mut cmd = Command::new("ffmpeg");
 
-    // Input file
+    // Input file; after a Dolby Vision Conversion, video comes from the converted stream.
     cmd.arg("-i").arg(&job.input_path);
+    let video_map = if plan.dolby_vision_conversion {
+        dolby_vision_conversion::apply_converted_input(&mut cmd, job);
+        dolby_vision_conversion::CONVERTED_VIDEO_MAP
+    } else {
+        "0:v:0?"
+    };
 
     // Progress output
     cmd.arg("-progress").arg("-").arg("-nostats");
@@ -1300,7 +1306,7 @@ fn build_av1_software_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) 
 
     // Audio handling (multi-track support)
     let container = container_from_output(job, profile);
-    apply_audio_settings(&mut cmd, profile, &container);
+    apply_audio_settings_with_video_map(&mut cmd, profile, &container, video_map);
 
     // Additional user-provided FFmpeg arguments
     apply_job_additional_args(&mut cmd, job, profile);

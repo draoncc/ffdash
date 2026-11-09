@@ -62,11 +62,12 @@ fn plan_dolby_vision(req: &PlanRequest, profile: DolbyVisionProfile) -> JobPlan 
     if req.codec == CodecKind::Vp9 {
         return JobPlan::Skip("VP9 can't carry Dolby Vision".to_string());
     }
-    // Profile 7 is converted to 8.1 first (HEVC only so far).
+    // Profile 7 is converted to 8.1 first (HEVC and AV1; AV1 then keeps it as Profile 10).
     let profile_ok = matches!(
         profile,
         DolbyVisionProfile::P5 | DolbyVisionProfile::P8_1 | DolbyVisionProfile::P8_4
-    ) || (profile == DolbyVisionProfile::P7 && req.codec == CodecKind::Hevc);
+    ) || (profile == DolbyVisionProfile::P7
+        && matches!(req.codec, CodecKind::Hevc | CodecKind::Av1));
     let container_ok = match req.codec {
         CodecKind::Hevc => matches!(req.container, "mkv" | "mp4"),
         CodecKind::Av1 => matches!(req.container, "mkv" | "mp4"),
@@ -396,8 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_7_to_av1_is_not_supported_yet_even_with_dovi_tool() {
-        // Profile 7 -> 8.1 -> AV1 is a later ticket; HEVC conversion exists.
+    fn profile_7_to_av1_with_dovi_tool_converts_to_8_1_on_libsvtav1() {
         let avail = dv_availability();
         for container in ["mkv", "mp4"] {
             let req = PlanRequest {
@@ -410,11 +410,46 @@ mod tests {
                 )
             };
             assert_eq!(
-                skip_reason(plan_job(&req)),
-                "Dolby Vision Profile 7 not supported yet",
+                plan_job(&req),
+                JobPlan::Encode(
+                    EncodePlan::new(LibsvtAv1)
+                        .with_dolby_vision(DolbyVisionProfile::P8_1)
+                        .with_dolby_vision_conversion()
+                ),
                 "{container}"
             );
         }
+    }
+
+    #[test]
+    fn profile_7_to_av1_without_dovi_tool_skips_with_an_install_reason() {
+        let avail = dv_availability();
+        for container in ["mkv", "mp4"] {
+            let plan = plan_job(&request(
+                CodecKind::Av1,
+                container,
+                Some(DolbyVisionProfile::P7),
+                &avail,
+            ));
+            assert_eq!(
+                plan,
+                JobPlan::Skip(DOVI_TOOL_MISSING_REASON.to_string()),
+                "{container}"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_7_to_av1_without_a_dolby_vision_capable_encoder_skips_even_with_dovi_tool() {
+        let avail = availability();
+        let req = PlanRequest {
+            dovi_tool: true,
+            ..request(CodecKind::Av1, "mkv", Some(DolbyVisionProfile::P7), &avail)
+        };
+        let JobPlan::Skip(reason) = plan_job(&req) else {
+            panic!("expected a skip");
+        };
+        assert!(reason.contains("can't encode Dolby Vision"), "{reason}");
     }
 
     #[test]

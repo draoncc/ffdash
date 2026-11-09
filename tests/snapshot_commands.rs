@@ -561,3 +561,26 @@ fn snapshot_hevc_x265_dolby_vision_profile_7_conversion_in_mkv() {
     let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
     assert_snapshot!("hevc_x265_dolby_vision_p7_conversion_mkv", out);
 }
+
+#[test]
+fn snapshot_av1_svt_dolby_vision_profile_7_conversion_in_mkv() {
+    use ffdash::engine::dolby_vision::DolbyVisionProfile as Dv;
+    let profile = Profile::get("av1-svt");
+    let job = mk_job("mkv");
+    let plan = EncodePlan::new(VideoEncoder::LibsvtAv1)
+        .with_host(HostPlatform::Linux)
+        .with_dolby_vision(Dv::P8_1)
+        .with_dolby_vision_conversion();
+    let cmds = build_encode_cmds(&job, &profile, &plan);
+    // Same pre-step as HEVC, then the libsvtav1 Dolby Vision encode from the
+    // converted stream with audio, subtitles and metadata from the original.
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(cmds[0].get_program(), "ffmpeg");
+    assert_eq!(cmds[1].get_program(), "dovi_tool");
+    assert_eq!(cmds[2].get_program(), "ffmpeg");
+    let out = cmds.iter().map(to_string).collect::<Vec<_>>().join("\n");
+    assert!(out.contains("-c:v libsvtav1"), "{out}");
+    assert!(out.contains("-dolbyvision 1"), "{out}");
+    assert!(out.contains("-map 1:v:0"), "{out}");
+    assert_snapshot!("av1_svt_dolby_vision_p7_conversion_mkv", out);
+}

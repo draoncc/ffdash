@@ -1,0 +1,7 @@
+---
+source: tests/snapshot_commands.rs
+expression: out
+---
+ffmpeg -i /tmp/input.mp4 -progress - -nostats -map 0:v:0 -c:v copy -bsf:v hevc_mp4toannexb -f hevc -y /tmp/output.mkv.dv-source.hevc
+dovi_tool -m 2 convert --discard -i /tmp/output.mkv.dv-source.hevc -o /tmp/output.mkv.dv-8-1.hevc
+ffmpeg -i /tmp/input.mp4 -i /tmp/output.mkv.dv-8-1.hevc -progress - -nostats -c:v libsvtav1 -crf 28 -preset 8 -svtav1-params tune=0:scd=1:scm=2 -dolbyvision 1 -pix_fmt yuv420p10le -g:v 240 -map 1:v:0 -map 0:a:0? -c:a:0 libopus -b:a:0 128k -vbr:a:0 on -map 0:s? -map 0:t? -c:s copy -c:t copy -map_metadata 0 -map_chapters 0 -y /tmp/output.mkv
