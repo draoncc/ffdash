@@ -16,7 +16,26 @@ mod dolby_vision_conversion;
 mod hevc;
 mod mp4_streams;
 
-use dolby_vision_conversion::{CleanupGuard, ConversionFiles, PRE_STEP_COMMANDS};
+use dolby_vision_conversion::{CleanupGuard, ConversionFiles};
+
+/// A command as a shell-style line, for display and the debug log.
+fn command_line(cmd: &Command) -> String {
+    format!(
+        "{} {}",
+        cmd.get_program().to_string_lossy(),
+        cmd.get_args()
+            .map(|arg| {
+                let s = arg.to_string_lossy();
+                if s.contains(' ') {
+                    format!("\"{}\"", s)
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
 
 /// Check if FFmpeg was cancelled by user signal (SIGTERM, SIGINT, SIGQUIT)
 /// Returns true if we should preserve partial output files
@@ -1809,7 +1828,7 @@ fn build_single_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
 /// The profile is used as given: legacy root fields are not re-synced from the codec
 /// config, so callers pass a profile that is already consistent.
 pub fn build_encode_cmds(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Vec<Command> {
-    build_cmds_inner(job, profile, plan, false)
+    build_cmds_inner(job, profile, plan, false).into_all()
 }
 
 /// Like [`build_encode_cmds`], but first re-syncs the profile's legacy root fields from
@@ -1819,6 +1838,32 @@ pub(crate) fn build_encode_cmds_synced(
     profile: &Profile,
     plan: &EncodePlan,
 ) -> Vec<Command> {
+    build_cmds_inner(job, profile, plan, true).into_all()
+}
+
+/// The commands of a job, split by phase: a Dolby Vision Conversion's pre-step
+/// commands (none for other jobs) and the encode itself (one command, or both
+/// passes of a two-pass encode).
+pub(crate) struct EncodeCommands {
+    pub pre_step: Vec<Command>,
+    pub encode: Vec<Command>,
+}
+
+impl EncodeCommands {
+    fn into_all(self) -> Vec<Command> {
+        let mut all = self.pre_step;
+        all.extend(self.encode);
+        all
+    }
+}
+
+/// [`build_encode_cmds_synced`] with the pre-step and the encode kept apart, for
+/// the encode driver, which runs them as separate phases.
+pub(crate) fn build_encode_commands_synced(
+    job: &VideoJob,
+    profile: &Profile,
+    plan: &EncodePlan,
+) -> EncodeCommands {
     build_cmds_inner(job, profile, plan, true)
 }
 
@@ -1827,7 +1872,7 @@ fn build_cmds_inner(
     profile: &Profile,
     plan: &EncodePlan,
     sync_legacy: bool,
-) -> Vec<Command> {
+) -> EncodeCommands {
     let mut profile = profile.clone();
 
     // Synchronize legacy fields from codec configuration (production paths only)
@@ -1856,7 +1901,10 @@ fn build_cmds_inner(
         let pass2 =
             build_software_cmd_internal(job, &profile, Some(2), Some(&passlog_prefix), None, false);
 
-        return vec![pass1, pass2];
+        return EncodeCommands {
+            pre_step: Vec::new(),
+            encode: vec![pass1, pass2],
+        };
     }
 
     // [Phase 4] Pre-encode validation and clamping (dev-tools only)
@@ -1877,12 +1925,14 @@ fn build_cmds_inner(
         }
     }
 
-    let mut cmds = Vec::new();
-    if plan.dolby_vision_conversion {
-        cmds.extend(dolby_vision_conversion::pre_step_cmds(job));
+    EncodeCommands {
+        pre_step: if plan.dolby_vision_conversion {
+            dolby_vision_conversion::pre_step_cmds(job)
+        } else {
+            Vec::new()
+        },
+        encode: vec![build_single_cmd(job, &profile, plan)],
     }
-    cmds.push(build_single_cmd(job, &profile, plan));
-    cmds
 }
 
 /// Build the ffmpeg command(s) for a job, resolving its profile by name and selecting
@@ -2267,43 +2317,23 @@ where
     job.encoder = Some(plan.encoder.ffmpeg_name().to_string());
     callback(job, &ProgressParser::new());
 
-    let mut cmds = build_encode_cmds_synced(job, &resolved_profile, &plan);
-    // A Dolby Vision Conversion adds its commands in front of the encode.
-    let pre_step_cmds: Vec<Command> = if plan.dolby_vision_conversion {
-        cmds.drain(..PRE_STEP_COMMANDS).collect()
-    } else {
-        Vec::new()
-    };
+    // A Dolby Vision Conversion has its own commands, run before the encode.
+    let EncodeCommands {
+        pre_step: pre_step_cmds,
+        encode: cmds,
+    } = build_encode_commands_synced(job, &resolved_profile, &plan);
     // Held until the job ends, however it ends: the conversion's temporary files
     // always go (success, failure, cancel, early return).
     let _conversion_cleanup = plan
         .dolby_vision_conversion
         .then(|| CleanupGuard::new(ConversionFiles::for_output(&job.output_path).paths()));
 
-    let cmd_to_string = |cmd: &Command| -> String {
-        format!(
-            "{} {}",
-            cmd.get_program().to_string_lossy(),
-            cmd.get_args()
-                .map(|arg| {
-                    let s = arg.to_string_lossy();
-                    if s.contains(' ') {
-                        format!("\"{}\"", s)
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    };
-
     let selected_encoder = cmds
         .first()
         .and_then(extract_video_encoder_arg)
         .unwrap_or_default();
 
-    let mut cmd_strings = cmds.iter().map(cmd_to_string).collect::<Vec<_>>();
+    let mut cmd_strings = cmds.iter().map(command_line).collect::<Vec<_>>();
 
     if !silent {
         if cmd_strings.len() == 1 {
@@ -2324,40 +2354,13 @@ where
     // Dolby Vision Conversion pre-step: extract the HEVC stream and convert it to
     // Profile 8.1, shown as its own phase before the encode starts.
     if !pre_step_cmds.is_empty() {
-        let pre_strings = pre_step_cmds.iter().map(cmd_to_string).collect::<Vec<_>>();
-        let _ = write_debug_log(&format!(
-            "\n=== Dolby Vision Conversion ===\n{}\n",
-            pre_strings.join("\n&& \\\n")
-        ));
-        job.status = JobStatus::ConvertingDolbyVision;
-        job.progress_pct = 0.0;
-        callback(job, &ProgressParser::new());
-
-        let outcome = run_cmds_with_progress(
+        if let Err(message) = dolby_vision_conversion::run(
             job,
             pre_step_cmds,
             silent,
-            1,
             pid_registry.as_ref(),
             &mut callback,
-        );
-        let failure = match outcome {
-            Ok((status, _, _, _)) if status.success() => None,
-            Ok((status, _, stderr, _)) => {
-                let lines: Vec<&str> = stderr.lines().collect();
-                let tail = lines[lines.len().saturating_sub(10)..].join("\n");
-                let cancelled = was_user_cancelled(&status, &stderr);
-                Some(format!(
-                    "Dolby Vision Conversion {} with status: {}\n\n{}",
-                    if cancelled { "was cancelled" } else { "failed" },
-                    status,
-                    tail
-                ))
-            }
-            Err(e) => Some(format!("Dolby Vision Conversion could not run: {e:#}")),
-        };
-        if let Some(message) = failure {
-            let _ = write_debug_log(&format!("✗ {}\n", message));
+        ) {
             job.status = JobStatus::Failed;
             job.last_error = Some(message);
             job.output_path = final_output;
@@ -2366,9 +2369,6 @@ where
                 job.last_error.as_deref().unwrap_or("Unknown error")
             );
         }
-        job.status = JobStatus::Running;
-        job.progress_pct = 0.0;
-        callback(job, &ProgressParser::new());
     }
 
     // Ensure two-pass directory exists (if needed)
@@ -2470,7 +2470,7 @@ where
             let fallback_cmd =
                 build_encode_cmds_synced(job, &resolved_profile, &fallback_plan).remove(0);
 
-            let fallback_cmd_strings = vec![cmd_to_string(&fallback_cmd)];
+            let fallback_cmd_strings = vec![command_line(&fallback_cmd)];
             if !silent {
                 println!("Fallback command: {}", fallback_cmd_strings[0]);
             }

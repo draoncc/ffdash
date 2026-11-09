@@ -15,11 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::super::log::write_debug_log;
-use super::super::types::VideoJob;
+use super::super::types::{JobStatus, ProgressParser, VideoJob};
+use super::{command_line, run_cmds_with_progress, was_user_cancelled};
+use crate::engine::worker::PidRegistry;
 use crate::engine::{dovi_tool, probe};
-
-/// How many commands the pre-step adds before the encode.
-pub const PRE_STEP_COMMANDS: usize = 2;
 
 /// The converted stream is input 1 of the final encode.
 pub const CONVERTED_VIDEO_MAP: &str = "1:v:0";
@@ -49,6 +48,12 @@ impl ConversionFiles {
 
     pub fn paths(&self) -> Vec<PathBuf> {
         vec![self.extracted.clone(), self.converted.clone()]
+    }
+
+    /// Delete files a previous run left behind (it crashed before its cleanup ran),
+    /// so the conversion never starts from or trips over a stale stream.
+    pub fn remove_stale(&self) {
+        drop(CleanupGuard::new(self.paths()));
     }
 }
 
@@ -101,6 +106,66 @@ pub(super) fn pre_step_cmds(job: &VideoJob) -> Vec<Command> {
 
     let convert = dovi_tool::convert_command(&files.extracted, &files.converted);
     vec![extract, convert]
+}
+
+/// The error text of a pre-step that did not succeed. A cancelled pre-step reads like
+/// a cancelled encode; a failed one names the conversion.
+fn failure_message(cancelled: bool, status: &str, stderr_tail: &str) -> String {
+    if cancelled {
+        format!("Encoding failed with status: {status}\n\nFFmpeg error:\n{stderr_tail}")
+    } else {
+        format!("Dolby Vision Conversion failed with status: {status}\n\n{stderr_tail}")
+    }
+}
+
+/// Run the pre-step as its own phase (`JobStatus::ConvertingDolbyVision`) and leave
+/// the job `Running` again on success. Stale files from a crashed run are removed
+/// first. On failure or cancel returns the message for the job's error; the caller
+/// ends the job.
+pub(super) fn run<F>(
+    job: &mut VideoJob,
+    cmds: Vec<Command>,
+    silent: bool,
+    pid_registry: Option<&PidRegistry>,
+    callback: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(&VideoJob, &ProgressParser),
+{
+    ConversionFiles::for_output(&job.output_path).remove_stale();
+
+    let lines = cmds.iter().map(command_line).collect::<Vec<_>>();
+    let _ = write_debug_log(&format!(
+        "\n=== Dolby Vision Conversion ===\n{}\n",
+        lines.join("\n&& \\\n")
+    ));
+    job.status = JobStatus::ConvertingDolbyVision;
+    job.progress_pct = 0.0;
+    callback(job, &ProgressParser::new());
+
+    // Not a two-pass encode: progress is not split into halves.
+    let outcome = run_cmds_with_progress(job, cmds, silent, 1, pid_registry, callback);
+    let message = match outcome {
+        Ok((status, _, _, _)) if status.success() => None,
+        Ok((status, _, stderr, _)) => {
+            let lines: Vec<&str> = stderr.lines().collect();
+            let tail = lines[lines.len().saturating_sub(10)..].join("\n");
+            let cancelled = was_user_cancelled(&status, &stderr);
+            if cancelled {
+                let _ = write_debug_log("[cleanup] Dolby Vision Conversion: user cancelled\n");
+            }
+            Some(failure_message(cancelled, &status.to_string(), &tail))
+        }
+        Err(e) => Some(format!("Dolby Vision Conversion could not run: {e:#}")),
+    };
+    if let Some(message) = message {
+        let _ = write_debug_log(&format!("✗ {message}\n"));
+        return Err(message);
+    }
+    job.status = JobStatus::Running;
+    job.progress_pct = 0.0;
+    callback(job, &ProgressParser::new());
+    Ok(())
 }
 
 /// Add the converted stream as the next input. A raw HEVC stream carries no frame
@@ -178,6 +243,29 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(!any_exists(&files));
+    }
+
+    #[test]
+    fn stale_files_from_a_crashed_run_are_removed_before_a_new_conversion() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = touch_files(dir.path());
+        files.remove_stale();
+        assert!(!any_exists(&files));
+    }
+
+    #[test]
+    fn a_cancelled_pre_step_reads_like_a_cancelled_encode() {
+        let cancelled = failure_message(true, "exit status: 255", "Exiting normally");
+        assert!(
+            cancelled.starts_with("Encoding failed with status:"),
+            "{cancelled}"
+        );
+        assert!(!cancelled.contains("was cancelled"), "{cancelled}");
+        let failed = failure_message(false, "exit status: 1", "boom");
+        assert!(
+            failed.starts_with("Dolby Vision Conversion failed"),
+            "{failed}"
+        );
     }
 
     #[test]
