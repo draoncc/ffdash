@@ -1182,7 +1182,7 @@ fn build_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
 // ============================================================================
 
 /// Build software AV1 encoding command (libsvtav1)
-fn build_av1_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
+fn build_av1_software_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Command {
     let mut cmd = Command::new("ffmpeg");
 
     // Input file
@@ -1242,8 +1242,16 @@ fn build_av1_software_cmd(job: &VideoJob, profile: &Profile) -> Command {
         cmd.arg("-preset").arg("8");
     }
 
+    // Dolby Vision: libsvtav1 writes Profile 10 from the frame RPU; output is 10-bit.
+    let dolby_vision = plan.dolby_vision.is_some();
+    if dolby_vision {
+        cmd.arg("-dolbyvision").arg("1");
+    }
+
     // Pixel format (default to 10-bit for AV1)
-    if profile.pix_fmt != "auto" {
+    if dolby_vision {
+        cmd.arg("-pix_fmt").arg("yuv420p10le");
+    } else if profile.pix_fmt != "auto" {
         cmd.arg("-pix_fmt").arg(&profile.pix_fmt);
     }
 
@@ -1741,7 +1749,7 @@ fn build_single_cmd(job: &VideoJob, profile: &Profile, plan: &EncodePlan) -> Com
             hardware::VideoEncoder::Av1Nvenc => build_av1_nvenc_cmd(job, profile, cpu_decode),
             hardware::VideoEncoder::Av1Vaapi => build_av1_vaapi_cmd(job, profile),
             // Software encoders; AMF is not implemented yet and falls back to software.
-            _ => build_av1_software_cmd(job, profile),
+            _ => build_av1_software_cmd(job, profile, plan),
         },
         Codec::Hevc(_) => hevc::build_hevc_cmd(job, profile, plan),
     }
